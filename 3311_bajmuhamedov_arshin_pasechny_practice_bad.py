@@ -1,26 +1,33 @@
-# -*- coding: utf-8 -*-
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -all
+#     formats: ipynb,py:percent
+#     notebook_metadata_filter: kernelspec,jupytext
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.18.1
+#   kernelspec:
+#     display_name: Python 3
+#     name: python3
+# ---
 
-# Text 1
+# %% [markdown]
+# Notebook для практики по дисциплине "Методы машинного обучения"
+# Выполнили студенты:
+# - Баймухамедов Рафаэль Русланович
+# - Аршин Александр Дмитриевич
+# - Пасечный Леонид Витальевич
+#
+# Преподаватель
+# - Петруша Полина Георгиевна
 
-"""3311_bajmuhamedov_arshin_pasechny_practice_BAD.ipynb
+# %% [markdown]
+# Скачаем датасет с Яндекс.Диска
 
-Original file is located at
-    https://colab.research.google.com/drive/1H3Lq0DAWUHRgZv0vycPhZJZN29IP0uBx
-
-Notebook для практики по дисциплине "Методы машинного обучения"
-Выполнили студенты:
-- Баймухамедов Рафаэль Русланович
-- Аршин Александр Дмитриевич
-- Пасечный Леонид Витальевич
-
-Преподаватель
-- Петруша Полина Георгиевна
-
-Скачаем датасет с Яндекс.Диска
-"""
-
-# Code 2
-
+# %%
 import requests
 from urllib.parse import urlencode
 
@@ -35,12 +42,10 @@ download_response = requests.get(download_url)
 with open('dataset.xlsx', 'wb') as f:
     f.write(download_response.content)
 
-# Text 3
+# %% [markdown]
+# Прочитаем в датафрейм наш файл
 
-"""Прочитаем в датафрейм наш файл"""
-
-# Code 4
-
+# %%
 from pathlib import Path
 import pandas as pd
 
@@ -52,30 +57,24 @@ print("Найден XLSX:", xlsx_path)
 df = pd.read_excel(xlsx_path, sheet_name=0, header=[0,1])
 print("Данные загружены в df")
 
-# Text 5
+# %% [markdown]
+# Настроим pandas
 
-"""Настроим pandas"""
-
-# Code 6
-
+# %%
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', None)
 pd.set_option('display.max_colwidth', None)
 
-# Text 7
+# %% [markdown]
+# Посмотрим на датафрейм
 
-"""Посмотрим на датафрейм"""
-
-# Code 8
-
+# %%
 df.head()
 
-# Text 9
+# %% [markdown]
+# Соединим заголовки первого и второго уровня вместе
 
-"""Соединим заголовки первого и второго уровня вместе"""
-
-# Code 10
-
+# %%
 import re
 from collections import Counter, defaultdict
 
@@ -102,12 +101,10 @@ for n in flat:
 
 df.columns = uniq
 
-# Text 11
+# %% [markdown]
+# Переименуем некоторые столбцы
 
-"""Переименуем некоторые столбцы"""
-
-# Code 12
-
+# %%
 to_rename = {
     "пищевые_вещества_макро-_и_микроэлементы": "пищевые_вещества_макро_и_микроэлементы",
     "минеральные_и_минерало-органические_природные_субстанции_цеолиты_гуминовые_кислоты":"минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты",
@@ -116,13 +113,50 @@ to_rename = {
     "система_органов_продолжительность_приема":"продолжительность_приема",
     "система_органов_происхождение":"происхождение",
     "система_органов_сырье_растительное_животное_биологическое":"сырье"
-
 }
 
 df = df.rename(columns=to_rename)
 
-print("Имена колонок (первые 50):")
+print("Имена колонок:")
 for c in df.columns[:]:
     print("-", c)
 
 df.head()
+
+# %% [markdown]
+# Сохранение изменений
+
+# %%
+# !pip -q install jupytext nbstripout
+
+from google.colab import drive
+drive.mount('/content/drive')
+
+NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_BAD.ipynb"
+
+cfg = '''formats = "ipynb,py:percent"
+cell_metadata_filter = "-all"
+notebook_metadata_filter = "kernelspec,jupytext"
+'''
+with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
+    f.write(cfg)
+
+import os, pathlib, time, textwrap, subprocess, json
+ipynb_path = pathlib.Path(NOTEBOOK)
+py_path = ipynb_path.with_suffix(".py")
+
+if not ipynb_path.exists():
+    raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
+
+print("IPYNB:", ipynb_path)
+print("PY:", py_path)
+
+# !nbstripout "{NOTEBOOK}"
+
+if py_path.exists():
+    py_path.unlink()
+# !jupytext --to py:percent "{NOTEBOOK}"
+
+import datetime
+stat = py_path.stat()
+print("\nОбновлён .py:", py_path)
