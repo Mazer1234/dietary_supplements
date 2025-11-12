@@ -70,6 +70,12 @@ pd.set_option('display.max_colwidth', None)
 
 df.head()
 
+# Text 9
+
+"""Соединим заголовки первого и второго уровня вместе"""
+
+# Code 10
+
 import re
 from collections import Counter, defaultdict
 
@@ -95,6 +101,12 @@ for n in flat:
     uniq.append(n if cnt[n] == 1 else f"{n}__{seen[n]}")
 
 df.columns = uniq
+
+# Text 11
+
+"""Переименуем некоторые столбцы"""
+
+# Code 12
 
 to_rename = {
     "пищевые_вещества_макро-_и_микроэлементы": "пищевые_вещества_макро_и_микроэлементы",
