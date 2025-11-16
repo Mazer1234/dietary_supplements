@@ -187,7 +187,7 @@ for row in range(len(df)):
 print(df['срок_годности'].unique())
 
 # %% [markdown]
-# Также меняем столбец возраст детей. Меняем года на месяцы
+# Также меняем столбец "возраст_детей". Меняем года на месяцы
 # Будет указано одно значение (12 например). Оно будет означать, что для детей от 12 месяцев.
 
 # %%
@@ -304,13 +304,23 @@ for c in df.columns[:]:
 for col in df.columns:
     print(col, len(df[col].unique().tolist()))
 
+# %% [markdown]
+# Посмотрим уникальные значения, если их в столбце меньше 5
+
 # %%
 for col in df.columns:
     if len(df[col].unique().tolist())<5:
         print(col, df[col].unique().tolist())
 
+# %% [markdown]
+# Посмотрим процент пустых значений (missing, NaN, undefined) в столбцах
+
 # %%
-print(col, df.isna().sum())
+num_rows = len(df)
+
+for col in df.columns:
+    missing_percent = (((df[col].isna().sum())/num_rows)*100).round(2)
+    print(f"{col}, {missing_percent}%")
 
 # %% [markdown]
 # Сохранение изменений
