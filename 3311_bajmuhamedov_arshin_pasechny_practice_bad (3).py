@@ -583,51 +583,148 @@ strong_pairs = []
 for i in range(len(correlation_matrix.columns)):
   for j in range(i+1, len(correlation_matrix.columns)):
     corr = correlation_matrix.iloc[i, j]
-    if abs(corr) >= 0.2:
+    if abs(corr) >= 0.2 and (j != "количество_приемов_в_день"):
       strong_pairs.append({
           'feature1': correlation_matrix.columns[i],
           'feature2': correlation_matrix.columns[j],
           'correlation': corr
       })
 
-strong_pairs = sorted(strong_pairs, key= lambda x: abs(x['correlation']), reverse=True)
+# Удаляем бессмысленные
+significant_pairs = sorted(strong_pairs, key= lambda x: abs(x['correlation']), reverse=True)[:-1]
+
+significant_pairs = [
+    p for p in significant_pairs
+    if not ('группа_населения_возраст_детей' in p['feature1']
+            and 'группа_населения_предназначен_для_взрослых' in p['feature2'])
+    and not ('группа_населения_возраст_детей' in p['feature2']
+            and 'группа_населения_предназначен_для_взрослых' in p['feature1'])
+]
 
 
 # %% [markdown]
 # Построим диаграмму рассеивания для пар с самой высокой корреляцией
 
 # %%
-n_cols = 3
-n_rows = (len(strong_pairs) + n_cols - 1) // n_cols
+from scipy.stats import pearsonr
 
-fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
-if len(strong_pairs) > 1:
-    axes = axes.ravel()
-else:
-    axes = [axes]
-for idx, pair in enumerate(strong_pairs):
-    ax = axes[idx]
-    feature1, feature2 = pair['feature1'], pair['feature2']
-    corr_value = pair['correlation']
+if significant_pairs:
+    n_cols = 3
+    n_rows = (len(significant_pairs) + n_cols - 1) // n_cols
 
-     # Scatter plot
-    scatter = ax.scatter(numeric_df[feature1], numeric_df[feature2],
-                           alpha=0.6, s=30)
-    ax.set_xlabel(feature1, fontsize=9)
-    ax.set_ylabel(feature2, fontsize=9)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 5*n_rows))
 
-    # # Цвет заголовка в зависимости от знака корреляции
-    # color = 'red' if corr_value > 0 else 'blue'
-    # ax.set_title(f'{feature1} vs {feature2}\nCorr: {corr_value:.3f}',
-    #                 color=color, fontsize=10, fontweight='bold')
-    # ax.grid(True, alpha=0.3)
+    if n_rows * n_cols == 1:
+        axes = [axes]
+    else:
+        axes = axes.ravel()
+
+    # Цветовая палитра для кластеров
+    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
+
+    for idx, pair in enumerate(significant_pairs):
+        if idx < len(axes):
+            ax = axes[idx]
+            feature1 = pair['feature1']
+            feature2 = pair['feature2']
+            corr_value = pair['correlation']
+
+            # Данные для текущей пары (удаляем пропуски)
+            data_pair = numeric_df[[feature1, feature2]].dropna()
+            x_data = data_pair[feature1]
+            y_data = data_pair[feature2]
+
+            # Если оба признака бинарные
+            if x_data.nunique() <= 2 and y_data.nunique() <= 2:
+                # Создаем группы для каждого сочетания бинарных значений
+                groups = data_pair.groupby([feature1, feature2]).size().reset_index(name='count')
+
+                # Рисуем точки для каждой группы с разным цветом
+                for i, (_, group) in enumerate(groups.iterrows()):
+                    x_val = group[feature1]
+                    y_val = group[feature2]
+                    count = group['count']
+
+                    # Добавляем jitter для разделения точек
+                    jitter_x = np.random.normal(0, 0.03, count)
+                    jitter_y = np.random.normal(0, 0.03, count)
+
+                    ax.scatter(x_val + jitter_x, y_val + jitter_y,
+                              alpha=0.7, s=50, color=colors[i % len(colors)],
+                              label=f'({x_val},{y_val}): {count}')
+
+                # Добавляем подписи количества для каждой группы
+                for _, group in groups.iterrows():
+                    x_val = group[feature1]
+                    y_val = group[feature2]
+                    count = group['count']
+
+                    # Подписываем количество над кластером
+                    ax.text(x_val, y_val + 0.1, f'n={count}',
+                           ha='center', va='bottom', fontsize=10, fontweight='bold',
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+
+                # Легенда
+                ax.legend(loc='upper left', bbox_to_anchor=(0, 0.5), fontsize=8)
+
+                # 6. Настройки осей
+                ax.set_xlabel(f'{feature1}\n(уник: {x_data.nunique()})', fontsize=11)
+                ax.set_ylabel(f'{feature2}\n(уник: {y_data.nunique()})', fontsize=11)
+
+            else:
+                scatter = ax.scatter(x_data, y_data, alpha=0.5, s=40, c='steelblue')
+
+                # 2. Линия тренда
+                if len(x_data) > 1:
+                    z = np.polyfit(x_data, y_data, 1)
+                    p = np.poly1d(z)
+                    x_trend = np.linspace(x_data.min(), x_data.max(), 100)
+                    ax.plot(x_trend, p(x_trend), "r--", linewidth=2, alpha=0.8,
+                           label=f'Тренд: y={z[0]:.3f}x+{z[1]:.3f}')
+
+                # 3. Вычисляем дополнительную статистику
+                stats_text = f"""N = {len(data_pair)}
+Корреляция = {corr_value:.3f}
+p-value = {pearsonr(x_data, y_data)[1]:.4f}
+R² = {corr_value**2:.3f}
+x: μ={x_data.mean():.2f} σ={x_data.std():.2f}
+y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
+
+                # 4. Добавляем текстовый блок со статистикой
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+                       verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5",
+                       facecolor='lightyellow', alpha=0.8))
+
+
+                # 6. Настройки осей
+                ax.set_xlabel(f'{feature1}\n(уник: {x_data.nunique()})', fontsize=11)
+                ax.set_ylabel(f'{feature2}\n(уник: {y_data.nunique()})', fontsize=11)
+
+                # 7. Заголовок с информацией о типе связи
+                if abs(corr_value) > 0.7:
+                    strength = "ОЧЕНЬ СИЛЬНАЯ"
+                elif abs(corr_value) > 0.5:
+                    strength = "СИЛЬНАЯ"
+                elif abs(corr_value) > 0.2:
+                    strength = "УМЕРЕННАЯ"
+                else:
+                    strength = "СЛАБАЯ"
+
+                direction = "ПОЛОЖИТЕЛЬНАЯ" if corr_value > 0 else "ОТРИЦАТЕЛЬНАЯ"
+
+
+                # 8. Сетка
+                ax.grid(True, alpha=0.3)
+
+                # 9. Легенда
+                ax.legend(loc='lower right', fontsize=9)
 
     # Скрываем пустые subplots
-for idx in range(len(strong_pairs), len(axes)):
-    axes[idx].set_visible(False)
+    for idx in range(len(significant_pairs), len(axes)):
+        axes[idx].set_visible(False)
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()
 
 # %% [markdown]
 # # Сохранение изменений
@@ -666,5 +763,3 @@ if py_path.exists():
 import datetime
 stat = py_path.stat()
 print("\nОбновлён .py:", py_path)
-
-# %%
