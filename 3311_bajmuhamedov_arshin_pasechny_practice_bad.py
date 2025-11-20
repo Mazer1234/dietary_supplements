@@ -343,9 +343,6 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
-    return None
-
-
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
@@ -619,7 +616,7 @@ print_info(df)
 # Посмотрим как выглядит датафрейм на данный момент
 
 # %%
-df_copy.head()
+df.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
