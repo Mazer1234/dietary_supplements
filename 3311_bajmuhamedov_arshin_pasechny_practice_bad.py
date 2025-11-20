@@ -317,15 +317,33 @@ df.loc[319, 'количество_приемов_в_день'] = 3
 
 # %%
 def print_info(df):
-    num_rows = len(df)
+    analysis = []
 
-    print("столбец | тип | кол-во уникальных значений | % пропущенных значений | список уникальных значений, если их меньше 6")
     for col in df.columns:
-        miss = df[col].isna() | (df[col] == 0) | df[col].astype(str).str.strip().isin(["0", "0.0"])
-        missing_percent = round(miss.mean() * 100, 2)
-        count_of_unique_values = len(df[col].unique())
-        unique_values = df[col].unique().tolist() if count_of_unique_values < 8 else ">5 unique values"
-        print(f"{col} | {df[col].dtypes} | {count_of_unique_values} | {missing_percent}% | {unique_values}")
+        dtype = df[col].dtype
+        unique_count = df[col].nunique()
+        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
+
+        unique_values = df[col].dropna().unique()
+        if len(unique_values) <= 5:
+            unique_display = list(unique_values)
+        else:
+            unique_display = ">5 unique values"
+
+        analysis.append({
+            'столбец': col,
+            'тип': str(dtype),
+            'уникальных': unique_count,
+            'пропущено %': f"{missing_pct}%",
+            'уникальные значения': unique_display
+        })
+
+    result_df = pd.DataFrame(analysis)
+
+    from tabulate import tabulate
+    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
+
+    return None
 
 
 # %% [markdown]
@@ -601,7 +619,7 @@ print_info(df)
 # Посмотрим как выглядит датафрейм на данный момент
 
 # %%
-df.head()
+df_copy.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
@@ -617,6 +635,20 @@ numeric_df = df[numeric_columns].copy()
 correlation_pearson = numeric_df.corr(method='pearson') # linear data
 correlation_spearman = numeric_df.corr(method='spearman') # unlinear data
 
+
+# %% [markdown]
+# Определим количество компонентов в столбце "биологически_активные_вещества" и занесем эти данные в столбец "количество_групп_компонентов"
+
+# %%
+def count_items(text):
+    if pd.isna(text):
+        return 0
+    items = str(text).split(',')
+    return len([item for item in items if item.strip()])
+
+df_save['количество_групп_компонентов'] = df_save['биологически_активные_вещества'].apply(count_items)
+df['количество_групп_компонентов'] = df_save['количество_групп_компонентов']
+df_save = df_save.drop('количество_групп_компонентов', axis=1)
 
 # %% [markdown]
 # Heatmap на основе корреляции
@@ -813,58 +845,11 @@ for col in sys_org:
 for col in group_people:
   df = df.drop(col, axis=1)
 
-
-# %% [markdown]
-# функция определяет количество компонентов в баде
-
-# %%
-def count_items(text):
-    if pd.isna(text):
-        return 0
-    items = str(text).split(',')
-    return len([item for item in items if item.strip()])
-
-df['количество_групп_компонентов'] = df['биологически_активные_вещества'].apply(count_items)
-
 # %%
 df.head()
 
-
 # %%
-def analyze_dataframe_clean(df):
-    analysis = []
-
-    for col in df.columns:
-        dtype = df[col].dtype
-        unique_count = df[col].nunique()
-        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
-
-        # Уникальные значения
-        unique_values = df[col].dropna().unique()
-        if len(unique_values) <= 5:
-            unique_display = list(unique_values)
-        else:
-            unique_display = ">5 unique values"
-
-        analysis.append({
-            'столбец': col,
-            'тип': str(dtype),
-            'уникальных': unique_count,
-            'пропущено %': f"{missing_pct}%",
-            'уникальные значения': unique_display
-        })
-
-    result_df = pd.DataFrame(analysis)
-
-    # ТОЛЬКО ОДИН ВЫВОД - через tabulate
-    from tabulate import tabulate
-    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
-
-    # НЕ возвращаем датафрейм, чтобы избежать дублирования
-    return None
-
-# Использование
-analyze_dataframe_clean(df)
+print_info(df)
 
 # %% [markdown]
 # # Сохранение изменений
