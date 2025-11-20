@@ -858,9 +858,9 @@ print_info(df)
 # !pip -q install jupytext nbstripout
 
 from google.colab import drive
-drive.mount('drive')
+drive.mount('/content/drive')
 
-NOTEBOOK = "drive/MyDrive/Colab Notebooks/merge_columns/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
 
 cfg = '''formats = "ipynb,py:percent"
 cell_metadata_filter = "-all"
