@@ -808,7 +808,7 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
 df = df.join(df_save)
 for col in biolog_columns:
   df = df.drop(col, axis=1)
-for col in Sys_org:
+for col in sys_org:
   df = df.drop(col, axis=1)
 for col in group_people:
   df = df.drop(col, axis=1)
