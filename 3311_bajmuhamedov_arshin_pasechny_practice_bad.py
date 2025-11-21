@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.17.3
 #   kernelspec:
 #     display_name: Python 3
 #     name: python3
@@ -116,9 +116,9 @@ to_rename = {
     "система_органов_костно-мышечная_сиситема": "система_органов_костно_мышечная_система",
     "система_органов_форма_выпуска":"форма_выпуска",
     "система_органов_продолжительность_приема":"продолжительность_приема",
-    "система_органов_происхождение":"происхождение",
     "система_органов_сырье_растительное_животное_биологическое":"сырье",
-    "система_органов_сердечно-сосудистая_система":"система_органов_сердечно_сосудистая_система"
+    "система_органов_сердечно-сосудистая_система":"система_органов_сердечно_сосудистая_система",
+    "система_органов_происхождение_природное_синтетическое":"происхождение_природное_синтетическое"
 }
 
 df = df.rename(columns=to_rename)
@@ -317,22 +317,112 @@ df.loc[319, 'количество_приемов_в_день'] = 3
 
 # %%
 def print_info(df):
-    num_rows = len(df)
+    analysis = []
 
-    print("столбец | тип | кол-во уникальных значений | % пропущенных значений | список уникальных значений, если их меньше 6")
     for col in df.columns:
-        miss = df[col].isna() | (df[col] == 0) | df[col].astype(str).str.strip().isin(["0", "0.0"])
-        missing_percent = round(miss.mean() * 100, 2)
-        count_of_unique_values = len(df[col].unique())
-        unique_values = df[col].unique().tolist() if count_of_unique_values < 8 else ">5 unique values"
-        print(f"{col} | {df[col].dtypes} | {count_of_unique_values} | {missing_percent}% | {unique_values}")
+        dtype = df[col].dtype
+        unique_count = df[col].nunique()
+        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
 
+        unique_values = df[col].dropna().unique()
+        if len(unique_values) <= 5:
+            unique_display = list(unique_values)
+        else:
+            unique_display = ">5 unique values"
+
+        analysis.append({
+            'столбец': col,
+            'тип': str(dtype),
+            'уникальных': unique_count,
+            'пропущено %': f"{missing_pct}%",
+            'уникальные значения': unique_display
+        })
+
+    result_df = pd.DataFrame(analysis)
+
+    from tabulate import tabulate
+    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
 # %%
 print_info(df)
+
+# %% [markdown]
+# Объединение группы столбцов:
+#
+# - J-X: Биологически_активные_вещества
+# - Y-AL: Системы_органов
+# - AQ-AU: Группа_населения
+#
+# Они заносятся в отдельный датафрей и в дальнейшем добавляются к основному датафрейму
+
+# %% [markdown]
+# Сделаем список столбцов которые мы хотим объединить
+# 1. биологически_вещества
+# 2. системы_органов
+# 3. группа_населения
+
+# %%
+df_copy=df.copy()
+biolog_columns = [
+    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
+    "пищевые_вещества_макро_и_микроэлементы",
+    "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
+    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
+    "пищевые_вещества_углеводы_и_продукты_их_переработки",
+    "минорные_компоненты_растений_фенольные_соединения",
+    "минорные_компоненты_растений_алкалоиды",
+    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
+    "минорные_компоненты_растений_сапонины",
+    "минорные_компоненты_растений_терпеноиды",
+    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
+    "минорные_компоненты_растений_гидроксикоричные_кислоты",
+    "минорные_компоненты_растений_ферменты",
+    "минорные_компоненты_растений_дубильные_вещества",
+    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты"
+]
+
+sys_org = []
+for col in df.columns:
+    if col.startswith("система_органов"):
+        sys_org.append(col)
+
+group_people = []
+for col in df.columns:
+   if col.startswith("группа_населения"):
+    group_people.append(col)
+
+
+# %% [markdown]
+# Функция для объединения столбцов
+
+# %%
+def combine_columns(df, cols, name_map=None):
+    def get_values(row):
+        out = []
+        for col in cols:
+            val = row[col]
+            if isinstance(val, (int, float)) and val == 1:
+                pretty = name_map[col] if name_map and col in name_map else col
+                out.append(pretty)
+            elif isinstance(val, str) and val.strip():
+                out.append(val.strip())
+        if not out:
+            return None
+
+        return ", ".join(dict.fromkeys(out))
+    return df.apply(get_values, axis=1)
+
+
+# %%
+df_bi=combine_columns(df_copy, biolog_columns, "биологически_активные_вещества")
+df_sy=combine_columns(df_copy, sys_org, "системы_органов")
+df_gr=combine_columns(df_copy, group_people, "группа_населения")
+
+df_save=pd.DataFrame({
+    "биологически_активные_вещества": df_bi,"системы_органы": df_sy,"группы_населения": df_gr})
 
 
 # %% [markdown]
@@ -472,6 +562,8 @@ df["продолжительность_приема"] = (pd.to_numeric(df["пр�
 df["срок_годности"] = (pd.to_numeric(df["срок_годности"],errors="coerce").astype("Float64"))
 df["группа_населения_возраст_детей"] = (pd.to_numeric(df["группа_населения_возраст_детей"], errors="coerce").astype("Int64"))
 df["происхождение"] = pd.to_numeric(df["происхождение"], errors="coerce").astype("Int8")
+df["количество_единиц_на_прием"] = pd.to_numeric(df["количество_единиц_на_прием"]).astype("Int64")
+df["количество_приемов_в_день"] = pd.to_numeric(df["количество_приемов_в_день"]).astype("Int64")
 binary_cols = [
     "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
     "пищевые_вещества_макро_и_микроэлементы",
@@ -529,6 +621,232 @@ df.head()
 # %% [markdown]
 # Вопросы на рассмотрение:
 # Порог процента пустых значений, при котором мы отбросим столбец
+
+# %% [markdown]
+# Посмотрим корреляцию числовых признаков
+
+# %%
+numeric_columns = df.select_dtypes(include=['int8', 'Int8', 'int64', 'Int64', 'float64', 'Float64']).columns
+numeric_df = df[numeric_columns].copy()
+
+correlation_pearson = numeric_df.corr(method='pearson') # linear data
+correlation_spearman = numeric_df.corr(method='spearman') # unlinear data
+
+
+# %% [markdown]
+# Определим количество компонентов в столбце "биологически_активные_вещества" и занесем эти данные в столбец "количество_групп_компонентов"
+
+# %%
+def count_items(text):
+    if pd.isna(text):
+        return 0
+    items = str(text).split(',')
+    return len([item for item in items if item.strip()])
+
+df_save['количество_групп_компонентов'] = df_save['биологически_активные_вещества'].apply(count_items)
+df['количество_групп_компонентов'] = df_save['количество_групп_компонентов']
+df_save = df_save.drop('количество_групп_компонентов', axis=1)
+
+# %% [markdown]
+# Heatmap на основе корреляции
+
+# %%
+import matplotlib.pyplot as plt
+import seaborn as sns
+# Heatmap Пирсон
+plt.figure(figsize=(16, 14))
+sns.heatmap(correlation_pearson,
+            annot=False,
+            cmap='coolwarm',
+            center=0,
+            fmt='.2f',
+            linewidths=0.5)
+plt.title('Корреляция Пирсона (линейная)')
+plt.tight_layout()
+plt.show()
+
+# Heatmap Спирман
+plt.figure(figsize=(16, 14))
+sns.heatmap(correlation_spearman,
+            annot=False,
+            cmap='coolwarm',
+            center=0,
+            fmt='.2f',
+            linewidths=0.5)
+plt.title('Корреляция Спирмана (ранговая)')
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# Выберем пары с самой высокой корреляцией
+
+# %%
+correlation_matrix = df[numeric_columns].corr()
+
+strong_pairs = []
+for i in range(len(correlation_matrix.columns)):
+  for j in range(i+1, len(correlation_matrix.columns)):
+    corr = correlation_matrix.iloc[i, j]
+    if abs(corr) >= 0.2 and (j != "количество_приемов_в_день"):
+      strong_pairs.append({
+          'feature1': correlation_matrix.columns[i],
+          'feature2': correlation_matrix.columns[j],
+          'correlation': corr
+      })
+
+# Удаляем бессмысленные
+significant_pairs = sorted(strong_pairs, key= lambda x: abs(x['correlation']), reverse=True)[:-1]
+
+significant_pairs = [
+    p for p in significant_pairs
+    if not ('группа_населения_возраст_детей' in p['feature1']
+            and 'группа_населения_предназначен_для_взрослых' in p['feature2'])
+    and not ('группа_населения_возраст_детей' in p['feature2']
+            and 'группа_населения_предназначен_для_взрослых' in p['feature1'])
+]
+
+
+# %% [markdown]
+# Построим диаграмму рассеивания для пар с самой высокой корреляцией
+
+# %%
+from scipy.stats import pearsonr
+
+if significant_pairs:
+    n_cols = 3
+    n_rows = (len(significant_pairs) + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 5*n_rows))
+
+    if n_rows * n_cols == 1:
+        axes = [axes]
+    else:
+        axes = axes.ravel()
+
+    # Цветовая палитра для кластеров
+    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
+
+    for idx, pair in enumerate(significant_pairs):
+        if idx < len(axes):
+            ax = axes[idx]
+            feature1 = pair['feature1']
+            feature2 = pair['feature2']
+            corr_value = pair['correlation']
+
+            # Данные для текущей пары (удаляем пропуски)
+            data_pair = numeric_df[[feature1, feature2]].dropna()
+            x_data = data_pair[feature1]
+            y_data = data_pair[feature2]
+
+            # Если оба признака бинарные
+            if x_data.nunique() <= 2 and y_data.nunique() <= 2:
+                # Создаем группы для каждого сочетания бинарных значений
+                groups = data_pair.groupby([feature1, feature2]).size().reset_index(name='count')
+
+                # Рисуем точки для каждой группы с разным цветом
+                for i, (_, group) in enumerate(groups.iterrows()):
+                    x_val = group[feature1]
+                    y_val = group[feature2]
+                    count = group['count']
+
+                    # Добавляем jitter для разделения точек
+                    jitter_x = np.random.normal(0, 0.03, count)
+                    jitter_y = np.random.normal(0, 0.03, count)
+
+                    ax.scatter(x_val + jitter_x, y_val + jitter_y,
+                              alpha=0.7, s=50, color=colors[i % len(colors)],
+                              label=f'({x_val},{y_val}): {count}')
+
+                # Добавляем подписи количества для каждой группы
+                for _, group in groups.iterrows():
+                    x_val = group[feature1]
+                    y_val = group[feature2]
+                    count = group['count']
+
+                    # Подписываем количество над кластером
+                    ax.text(x_val, y_val + 0.1, f'n={count}',
+                           ha='center', va='bottom', fontsize=10, fontweight='bold',
+                           bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+
+                # Легенда
+                ax.legend(loc='upper left', bbox_to_anchor=(0, 0.5), fontsize=8)
+
+                # 6. Настройки осей
+                ax.set_xlabel(f'{feature1}\n(уник: {x_data.nunique()})', fontsize=11)
+                ax.set_ylabel(f'{feature2}\n(уник: {y_data.nunique()})', fontsize=11)
+
+            else:
+                scatter = ax.scatter(x_data, y_data, alpha=0.5, s=40, c='steelblue')
+
+                # 2. Линия тренда
+                if len(x_data) > 1:
+                    z = np.polyfit(x_data, y_data, 1)
+                    p = np.poly1d(z)
+                    x_trend = np.linspace(x_data.min(), x_data.max(), 100)
+                    ax.plot(x_trend, p(x_trend), "r--", linewidth=2, alpha=0.8,
+                           label=f'Тренд: y={z[0]:.3f}x+{z[1]:.3f}')
+
+                # 3. Вычисляем дополнительную статистику
+                stats_text = f"""N = {len(data_pair)}
+Корреляция = {corr_value:.3f}
+p-value = {pearsonr(x_data, y_data)[1]:.4f}
+R² = {corr_value**2:.3f}
+x: μ={x_data.mean():.2f} σ={x_data.std():.2f}
+y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
+
+                # 4. Добавляем текстовый блок со статистикой
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+                       verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5",
+                       facecolor='lightyellow', alpha=0.8))
+
+
+                # 6. Настройки осей
+                ax.set_xlabel(f'{feature1}\n(уник: {x_data.nunique()})', fontsize=11)
+                ax.set_ylabel(f'{feature2}\n(уник: {y_data.nunique()})', fontsize=11)
+
+                # 7. Заголовок с информацией о типе связи
+                if abs(corr_value) > 0.7:
+                    strength = "ОЧЕНЬ СИЛЬНАЯ"
+                elif abs(corr_value) > 0.5:
+                    strength = "СИЛЬНАЯ"
+                elif abs(corr_value) > 0.2:
+                    strength = "УМЕРЕННАЯ"
+                else:
+                    strength = "СЛАБАЯ"
+
+                direction = "ПОЛОЖИТЕЛЬНАЯ" if corr_value > 0 else "ОТРИЦАТЕЛЬНАЯ"
+
+
+                # 8. Сетка
+                ax.grid(True, alpha=0.3)
+
+                # 9. Легенда
+                ax.legend(loc='lower right', fontsize=9)
+
+    # Скрываем пустые subplots
+    for idx in range(len(significant_pairs), len(axes)):
+        axes[idx].set_visible(False)
+
+    plt.tight_layout()
+    plt.show()
+
+# %% [markdown]
+# Объединение столбцов:биологически_активные_вещества, системы_органы,группы_населения с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
+
+# %%
+df = df.join(df_save)
+for col in biolog_columns:
+  df = df.drop(col, axis=1)
+for col in sys_org:
+  df = df.drop(col, axis=1)
+for col in group_people:
+  df = df.drop(col, axis=1)
+
+# %%
+df.head()
+
+# %%
+print_info(df)
 
 # %% [markdown]
 # # Сохранение изменений
