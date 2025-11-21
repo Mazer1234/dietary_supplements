@@ -343,6 +343,9 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
+    return None
+
+
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
@@ -616,7 +619,7 @@ print_info(df)
 # Посмотрим как выглядит датафрейм на данный момент
 
 # %%
-df.head()
+df_copy.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
@@ -849,15 +852,150 @@ df.head()
 print_info(df)
 
 # %% [markdown]
+# Добавим парсинг столбца сырье на ингредиент_описание, ингредиент_рус, ингредиент_лат
+
+# %% [markdown]
+# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
+
+# %%
+import re
+
+# Парсим с
+def parse_ingredient_string(raw_string):
+  if pd.isna(raw_string) or not raw_string.strip():
+    return []
+
+  ingredients = []
+  current = []
+  bracket_count = 0
+  quote_count = 0
+
+  for char in raw_string:
+    if char == '(':
+      bracket_count += 1
+    elif char == ')':
+      bracket_count -= 1
+    elif char == '"':
+      quote_count = 1 - quote_count
+
+    if char == ',' and bracket_count == 0 and quote_count == 0:
+      ingredient_str = ''.join(current).strip()
+      if ingredient_str:
+        ingredients.append(ingredient_str)
+      current = []
+    else:
+      current.append(char)
+
+  if current:
+    ingredient_str = ''.join(current).strip()
+    if ingredient_str:
+      ingredients.append(ingredient_str)
+
+  return ingredients
+
+
+# %% [markdown]
+# Ф-я для парсинга отдельного ингредиента на 3 компонента
+
+# %%
+def parse_single_ingredient(ingredient):
+    if not ingredient or pd.isna(ingredient) or ingredient == 'nan':
+        return ("", "", "")
+
+    ingredient = str(ingredient).strip()
+
+    if ingredient in ['nan', 'None', '']:
+        return ("", "", "")
+
+    pattern1 = r'^(.+?)\s*\(([^()]+?)\s*[–\-—]\s*([^()]+?)\)\s*\.?$'
+    match1 = re.match(pattern1, ingredient)
+
+    if match1:
+        description = match1.group(1).strip()
+        russian = match1.group(2).strip()
+        latin = match1.group(3).strip()
+        description = description.rstrip('.')
+        russian = russian.rstrip('.').strip('–').strip()
+        latin = latin.rstrip('.').strip('–').strip()
+        return (description, russian, latin)
+
+    pattern2 = r'^(.+?)\s*\(([^()]+?)\)\s*\.?$'
+    match2 = re.match(pattern2, ingredient)
+
+    if match2:
+        description = match2.group(1).strip()
+        content = match2.group(2).strip()
+
+        has_latin = bool(re.search(r'[a-zA-Z]', content))
+        has_cyrillic = bool(re.search(r'[а-яА-Я]', content))
+
+        description = description.rstrip('.')
+        content = content.rstrip('.').strip('–').strip()
+
+        if has_latin and not has_cyrillic:
+            return (description, "", content)
+        elif has_cyrillic and not has_latin:
+            return (description, content, "")
+        else:
+            return (description, content, "")
+
+    ingredient = ingredient.rstrip('.')
+    return (ingredient, "", "")
+
+
+# %%
+df["ингредиент_описание"] = ''
+df["ингредиент_рус"] = ''
+df["ингредиент_лат"] = ''
+
+for row in range(len(df)):
+    raw_value = df.at[row, "сырье"]
+
+    if pd.isna(raw_value) or str(raw_value).strip() in ['', 'nan', 'None']:
+        df.at[row, "ингредиент_описание"] = ""
+        df.at[row, "ингредиент_рус"] = ""
+        df.at[row, "ингредиент_лат"] = ""
+        continue
+
+    string = str(raw_value).strip()
+    ingredients = parse_ingredient_string(string)
+
+    if not ingredients:
+        description, russian, latin = parse_single_ingredient(string)
+        df.at[row, "ингредиент_описание"] = description
+        df.at[row, "ингредиент_рус"] = russian
+        df.at[row, "ингредиент_лат"] = latin
+
+    else:
+        description_list = []
+        russian_list = []
+        latin_list = []
+
+        for ingredient in ingredients:
+            description, russian, latin = parse_single_ingredient(ingredient)
+            if description:
+                description_list.append(description)
+                russian_list.append(russian)
+                latin_list.append(latin)
+
+        df.at[row, "ингредиент_описание"] = ",".join(description_list) if description_list else ""
+        df.at[row, "ингредиент_рус"] = ",".join(russian_list) if russian_list else ""
+        df.at[row, "ингредиент_лат"] = ",".join(latin_list) if latin_list else ""
+
+
+# %%
+print(df['ингредиент_рус'])
+
+# %% [markdown]
 # # Сохранение изменений
 
 # %%
 # !pip -q install jupytext nbstripout
 
 from google.colab import drive
-drive.mount('/content/drive')
+drive.mount('drive')
 
-NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+NOTEBOOK = "drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
 
 cfg = '''formats = "ipynb,py:percent"
 cell_metadata_filter = "-all"
@@ -885,3 +1023,5 @@ if py_path.exists():
 import datetime
 stat = py_path.stat()
 print("\nОбновлён .py:", py_path)
+
+# %%
