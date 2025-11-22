@@ -1030,7 +1030,7 @@ print(df['ингредиент_описание'].isna().sum())
 from google.colab import drive
 drive.mount('/content/drive')
 
-NOTEBOOK = "drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
 
 cfg = '''formats = "ipynb,py:percent"
 cell_metadata_filter = "-all"
@@ -1058,5 +1058,3 @@ if py_path.exists():
 import datetime
 stat = py_path.stat()
 print("\nОбновлён .py:", py_path)
-
-# %%
