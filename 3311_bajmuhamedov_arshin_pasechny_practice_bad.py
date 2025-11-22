@@ -343,9 +343,6 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
-    return None
-
-
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
@@ -619,7 +616,7 @@ print_info(df)
 # Посмотрим как выглядит датафрейм на данный момент
 
 # %%
-df_copy.head()
+df.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
@@ -1031,9 +1028,9 @@ print(df['ингредиент_описание'].isna().sum())
 # !pip -q install jupytext nbstripout
 
 from google.colab import drive
-drive.mount('drive')
+drive.mount('/content/drive')
 
-NOTEBOOK = "drive/MyDrive/Colab Notebooks/merge_columns/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+NOTEBOOK = "drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
 
 cfg = '''formats = "ipynb,py:percent"
 cell_metadata_filter = "-all"
