@@ -116,9 +116,9 @@ to_rename = {
     "система_органов_костно-мышечная_сиситема": "система_органов_костно_мышечная_система",
     "система_органов_форма_выпуска":"форма_выпуска",
     "система_органов_продолжительность_приема":"продолжительность_приема",
-    "система_органов_происхождение":"происхождение",
     "система_органов_сырье_растительное_животное_биологическое":"сырье",
-    "система_органов_сердечно-сосудистая_система":"система_органов_сердечно_сосудистая_система"
+    "система_органов_сердечно-сосудистая_система":"система_органов_сердечно_сосудистая_система",
+    "система_органов_происхождение_природное_синтетическое":"происхождение_природное_синтетическое"
 }
 
 df = df.rename(columns=to_rename)
@@ -317,22 +317,112 @@ df.loc[319, 'количество_приемов_в_день'] = 3
 
 # %%
 def print_info(df):
-    num_rows = len(df)
+    analysis = []
 
-    print("столбец | тип | кол-во уникальных значений | % пропущенных значений | список уникальных значений, если их меньше 6")
     for col in df.columns:
-        miss = df[col].isna() | (df[col] == 0) | df[col].astype(str).str.strip().isin(["0", "0.0"])
-        missing_percent = round(miss.mean() * 100, 2)
-        count_of_unique_values = len(df[col].unique())
-        unique_values = df[col].unique().tolist() if count_of_unique_values < 8 else ">5 unique values"
-        print(f"{col} | {df[col].dtypes} | {count_of_unique_values} | {missing_percent}% | {unique_values}")
+        dtype = df[col].dtype
+        unique_count = df[col].nunique()
+        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
 
+        unique_values = df[col].dropna().unique()
+        if len(unique_values) <= 5:
+            unique_display = list(unique_values)
+        else:
+            unique_display = ">5 unique values"
+
+        analysis.append({
+            'столбец': col,
+            'тип': str(dtype),
+            'уникальных': unique_count,
+            'пропущено %': f"{missing_pct}%",
+            'уникальные значения': unique_display
+        })
+
+    result_df = pd.DataFrame(analysis)
+
+    from tabulate import tabulate
+    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
 # %%
 print_info(df)
+
+# %% [markdown]
+# Объединение группы столбцов:
+#
+# - J-X: Биологически_активные_вещества
+# - Y-AL: Системы_органов
+# - AQ-AU: Группа_населения
+#
+# Они заносятся в отдельный датафрей и в дальнейшем добавляются к основному датафрейму
+
+# %% [markdown]
+# Сделаем список столбцов которые мы хотим объединить
+# 1. биологически_вещества
+# 2. системы_органов
+# 3. группа_населения
+
+# %%
+df_copy=df.copy()
+biolog_columns = [
+    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
+    "пищевые_вещества_макро_и_микроэлементы",
+    "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
+    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
+    "пищевые_вещества_углеводы_и_продукты_их_переработки",
+    "минорные_компоненты_растений_фенольные_соединения",
+    "минорные_компоненты_растений_алкалоиды",
+    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
+    "минорные_компоненты_растений_сапонины",
+    "минорные_компоненты_растений_терпеноиды",
+    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
+    "минорные_компоненты_растений_гидроксикоричные_кислоты",
+    "минорные_компоненты_растений_ферменты",
+    "минорные_компоненты_растений_дубильные_вещества",
+    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты"
+]
+
+sys_org = []
+for col in df.columns:
+    if col.startswith("система_органов"):
+        sys_org.append(col)
+
+group_people = []
+for col in df.columns:
+   if col.startswith("группа_населения"):
+    group_people.append(col)
+
+
+# %% [markdown]
+# Функция для объединения столбцов
+
+# %%
+def combine_columns(df, cols, name_map=None):
+    def get_values(row):
+        out = []
+        for col in cols:
+            val = row[col]
+            if isinstance(val, (int, float)) and val == 1:
+                pretty = name_map[col] if name_map and col in name_map else col
+                out.append(pretty)
+            elif isinstance(val, str) and val.strip():
+                out.append(val.strip())
+        if not out:
+            return None
+
+        return ", ".join(dict.fromkeys(out))
+    return df.apply(get_values, axis=1)
+
+
+# %%
+df_bi=combine_columns(df_copy, biolog_columns, "биологически_активные_вещества")
+df_sy=combine_columns(df_copy, sys_org, "системы_органов")
+df_gr=combine_columns(df_copy, group_people, "группа_населения")
+
+df_save=pd.DataFrame({
+    "биологически_активные_вещества": df_bi,"системы_органы": df_sy,"группы_населения": df_gr})
 
 
 # %% [markdown]
@@ -544,6 +634,20 @@ correlation_spearman = numeric_df.corr(method='spearman') # unlinear data
 
 
 # %% [markdown]
+# Определим количество компонентов в столбце "биологически_активные_вещества" и занесем эти данные в столбец "количество_групп_компонентов"
+
+# %%
+def count_items(text):
+    if pd.isna(text):
+        return 0
+    items = str(text).split(',')
+    return len([item for item in items if item.strip()])
+
+df_save['количество_групп_компонентов'] = df_save['биологически_активные_вещества'].apply(count_items)
+df['количество_групп_компонентов'] = df_save['количество_групп_компонентов']
+df_save = df_save.drop('количество_групп_компонентов', axis=1)
+
+# %% [markdown]
 # Heatmap на основе корреляции
 
 # %%
@@ -725,6 +829,24 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
 
     plt.tight_layout()
     plt.show()
+
+# %% [markdown]
+# Объединение столбцов:биологически_активные_вещества, системы_органы,группы_населения с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
+
+# %%
+df = df.join(df_save)
+for col in biolog_columns:
+  df = df.drop(col, axis=1)
+for col in sys_org:
+  df = df.drop(col, axis=1)
+for col in group_people:
+  df = df.drop(col, axis=1)
+
+# %%
+df.head()
+
+# %%
+print_info(df)
 
 # %% [markdown]
 # # Сохранение изменений
