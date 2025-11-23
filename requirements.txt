@@ -6,6 +6,5 @@ tabulate
 matplotlib
 seaborn
 scipy
-google-colab
 jupyter
 nbconvert
