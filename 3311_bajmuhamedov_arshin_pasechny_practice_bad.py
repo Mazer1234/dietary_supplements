@@ -876,7 +876,7 @@ notebook_metadata_filter = "kernelspec,jupytext"
 with open(cfg_path, "w", encoding="utf-8") as f:
     f.write(cfg)
 
-ipynb_path = pathlib.Path(NOTEBOOK)
+ipynb_path = Path(NOTEBOOK)
 py_path = ipynb_path.with_suffix(".py")
 
 if not ipynb_path.exists():
