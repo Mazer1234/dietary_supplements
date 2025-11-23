@@ -32,6 +32,6 @@ jobs:
         run: |
           jupyter nbconvert \
             --to notebook \
-            --execute notebooks/test.ipynb \
-            --output notebooks/test_executed.ipynb \
+            --execute 3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb \
+            --output 3311_bajmuhamedov_arshin_pasechny_practice_bad_executed.ipynb \
             --ExecutePreprocessor.timeout=600
