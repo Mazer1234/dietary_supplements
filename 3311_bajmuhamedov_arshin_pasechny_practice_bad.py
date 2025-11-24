@@ -1,7 +1,7 @@
 # ---
 # jupyter:
 #   jupytext:
-#     cell_metadata_filter: -all
+#     cell_metadata_filter: -all, tags
 #     formats: ipynb,py:percent
 #     notebook_metadata_filter: kernelspec,jupytext
 #     text_representation:
@@ -842,8 +842,14 @@ for col in sys_org:
 for col in group_people:
   df = df.drop(col, axis=1)
 
+# %% [markdown]
+# Посмотрим как сейчас выглядит датафрейм
+
 # %%
 df.head()
+
+# %% [markdown]
+# Выведем суммарную информацци
 
 # %%
 print_info(df)
@@ -851,32 +857,24 @@ print_info(df)
 # %% [markdown]
 # # Сохранение изменений
 
-# %%
+# %% tags=["skip"]
 # !pip -q install jupytext nbstripout
-try:
-    from google.colab import drive
-    IN_COLAB = True
-except ImportError:
-    drive = None
-    IN_COLAB = False
+# !pip -q install jupytext nbstripout
 
-if IN_COLAB:
-    drive.mount('/content/drive')
-    NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
-    cfg_path = "/content/.jupytext.toml"
-else:
-    print("Пропускаем монтирование Google Drive")
-    NOTEBOOK = "3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
-    cfg_path = ".jupytext.toml"
+from google.colab import drive
+drive.mount('/content/drive')
+
+NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
 
 cfg = '''formats = "ipynb,py:percent"
-cell_metadata_filter = "-all"
+cell_metadata_filter = "-all, tags"
 notebook_metadata_filter = "kernelspec,jupytext"
 '''
-with open(cfg_path, "w", encoding="utf-8") as f:
+with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
     f.write(cfg)
 
-ipynb_path = Path(NOTEBOOK)
+import os, pathlib, time, textwrap, subprocess, json
+ipynb_path = pathlib.Path(NOTEBOOK)
 py_path = ipynb_path.with_suffix(".py")
 
 if not ipynb_path.exists():
@@ -891,5 +889,6 @@ if py_path.exists():
     py_path.unlink()
 # !jupytext --to py:percent "{NOTEBOOK}"
 
+import datetime
 stat = py_path.stat()
 print("\nОбновлён .py:", py_path)
