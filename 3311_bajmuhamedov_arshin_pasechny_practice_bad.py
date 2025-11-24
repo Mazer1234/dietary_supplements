@@ -877,9 +877,8 @@ except ImportError:
     IN_COLAB = False
 
 if not IN_COLAB:
-    print("Environment is NOT Colab. Setting safe variables.")
-    
-    NOTEBOOK = "dummy_notebook.ipynb"
+    print("Окружение не Colab. Настройка на безопасную версию")
+    NOTEBOOK = "3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
     cfg_path = ".jupytext.toml"
 else:
     print("Running in Colab, executing Jupytext sync logic...")
@@ -900,8 +899,7 @@ notebook_metadata_filter = "kernelspec,jupytext"
 with open(cfg_path, "w", encoding="utf-8") as f:
     f.write(cfg)
 
-if IN_COLAB:
-    
+if IN_COLAB:    
     ipynb_path = Path(NOTEBOOK)
     py_path = ipynb_path.with_suffix(".py")
 
@@ -910,7 +908,9 @@ if IN_COLAB:
 
     print("IPYNB:", ipynb_path)
     print("PY:", py_path)
-
+    
+    _system(f'nbstripout "{NOTEBOOK}"')
+    
     if py_path.exists():
         py_path.unlink()
     
