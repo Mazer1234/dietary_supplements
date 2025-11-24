@@ -1,7 +1,7 @@
 # ---
 # jupyter:
 #   jupytext:
-#     cell_metadata_filter: -all, tags
+#     cell_metadata_filter: -all,tags
 #     formats: ipynb,py:percent
 #     notebook_metadata_filter: kernelspec,jupytext
 #     text_representation:
@@ -849,7 +849,7 @@ for col in group_people:
 df.head()
 
 # %% [markdown]
-# Выведем суммарную информацци
+# Выведем суммарную информацци о датафрейме
 
 # %%
 print_info(df)
@@ -857,38 +857,49 @@ print_info(df)
 # %% [markdown]
 # # Сохранение изменений
 
+# %%
+
 # %% tags=["skip"]
-# !pip -q install jupytext nbstripout
-# !pip -q install jupytext nbstripout
+import os
+import pathlib
+from pathlib import Path
 
-from google.colab import drive
-drive.mount('/content/drive')
+IN_COLAB = os.getenv('COLAB_NOTEBOOK_MODE') is not None
 
-NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+if (from google.colab import drive):
+    print("Running in Colab, executing Jupytext sync logic...")
 
-cfg = '''formats = "ipynb,py:percent"
-cell_metadata_filter = "-all, tags"
-notebook_metadata_filter = "kernelspec,jupytext"
-'''
-with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
-    f.write(cfg)
+    # !pip -q install jupytext nbstripout
+    drive.mount('/content/drive')
 
-import os, pathlib, time, textwrap, subprocess, json
-ipynb_path = pathlib.Path(NOTEBOOK)
-py_path = ipynb_path.with_suffix(".py")
+    NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
 
-if not ipynb_path.exists():
-    raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
+    cfg = '''formats = "ipynb,py:percent"
+    cell_metadata_filter = "-all,tags"
+    notebook_metadata_filter = "kernelspec,jupytext"
+    '''
+    with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
+        f.write(cfg)
 
-print("IPYNB:", ipynb_path)
-print("PY:", py_path)
+    ipynb_path = Path(NOTEBOOK)
+    py_path = ipynb_path.with_suffix(".py")
 
-# !nbstripout "{NOTEBOOK}"
+    if not ipynb_path.exists():
+        raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
 
-if py_path.exists():
-    py_path.unlink()
-# !jupytext --to py:percent "{NOTEBOOK}"
+    print("IPYNB:", ipynb_path)
+    print("PY:", py_path)
 
-import datetime
-stat = py_path.stat()
-print("\nОбновлён .py:", py_path)
+    # !nbstripout "{NOTEBOOK}"
+
+    if py_path.exists():
+        py_path.unlink()
+    # !jupytext --to py:percent "{NOTEBOOK}"
+
+    import datetime
+    stat = py_path.stat()
+    print("\nОбновлён .py:", py_path)
+
+else:
+    print("Environment is NOT Colab (GitHub Actions detected). Skipping sync logic.")
+    pass
