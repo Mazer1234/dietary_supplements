@@ -11,7 +11,6 @@ on:
       branch_name:
         description: 'Ветка для запуска'
         required: true
-        default: ${{ github.ref_name }}
         type: string
 
 jobs:
