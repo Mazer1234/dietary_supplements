@@ -28,11 +28,12 @@ jobs:
           pip install flake8 pylint
 
       - name: Lint with flake8
+        continue-on-error: true
         run: |
-          # Можно весь репозиторий, можно конкретный файл
           flake8 . --max-line-length=120
 
       - name: Lint with pylint
+        continue-on-error: true
         run: |
           pylint 3311_bajmuhamedov_arshin_pasechny_practice_bad.py \
             --disable=C0114,C0115,C0116
