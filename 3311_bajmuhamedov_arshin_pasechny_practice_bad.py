@@ -864,23 +864,29 @@ import os
 import pathlib
 from pathlib import Path
 
-IN_COLAB = os.getenv('COLAB_NOTEBOOK_MODE') is not None
+IN_COLAB = False
+try:
+    import google.colab
+    IN_COLAB = True
+except ImportError:
+    IN_COLAB = False
 
-if (from google.colab import drive):
+if IN_COLAB:
     print("Running in Colab, executing Jupytext sync logic...")
-
-    # !pip -q install jupytext nbstripout
+    
+    !pip -q install jupytext nbstripout
+    from google.colab import drive
     drive.mount('/content/drive')
-
+    
     NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
-
+    
     cfg = '''formats = "ipynb,py:percent"
     cell_metadata_filter = "-all,tags"
     notebook_metadata_filter = "kernelspec,jupytext"
     '''
     with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
         f.write(cfg)
-
+        
     ipynb_path = Path(NOTEBOOK)
     py_path = ipynb_path.with_suffix(".py")
 
@@ -890,11 +896,11 @@ if (from google.colab import drive):
     print("IPYNB:", ipynb_path)
     print("PY:", py_path)
 
-    # !nbstripout "{NOTEBOOK}"
+    !nbstripout "{NOTEBOOK}"
 
     if py_path.exists():
         py_path.unlink()
-    # !jupytext --to py:percent "{NOTEBOOK}"
+    !jupytext --to py:percent "{NOTEBOOK}"
 
     import datetime
     stat = py_path.stat()
