@@ -1,4 +1,4 @@
-name: Run notebook on any branch
+name: Run jobs on any branch
 
 on:
   push:
@@ -64,7 +64,8 @@ jobs:
             --to notebook \
             --execute 3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb \
             --output 3311_bajmuhamedov_arshin_pasechny_practice_bad_executed.ipynb \
-            --ExecutePreprocessor.timeout=600
+            --ExecutePreprocessor.timeout=600 \
+            --TagRemovePreprocessor.remove_cell_tags='["skip"]'
       
       - name: Upload executed notebook
         if: always()
