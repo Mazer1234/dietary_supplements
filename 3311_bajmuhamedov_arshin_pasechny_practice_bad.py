@@ -862,6 +862,13 @@ import os, sys
 import pathlib
 from pathlib import Path
 
+try:
+    _system = get_ipython().system
+except NameError:
+    import subprocess
+    def _system(cmd):
+        return subprocess.check_call(cmd, shell=True)
+
 IN_COLAB = False
 try:
     import google.colab
@@ -869,40 +876,49 @@ try:
 except ImportError:
     IN_COLAB = False
 
-if not(IN_COLAB):
-    print("Environment is NOT Colab. Skipping sync logic.")
-    sys.exit(0)
-
-print("Running in Colab, executing Jupytext sync logic...")
-
-# !pip -q install jupytext nbstripout
-from google.colab import drive
-drive.mount('/content/drive')
-
-NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+if not IN_COLAB:
+    print("Environment is NOT Colab. Setting safe variables.")
+    
+    NOTEBOOK = "dummy_notebook.ipynb"
+    cfg_path = ".jupytext.toml"
+else:
+    print("Running in Colab, executing Jupytext sync logic...")
+    
+    from google.colab import drive
+    drive.mount('/content/drive')
+    
+    NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+    cfg_path = "/content/.jupytext.toml"
+    
+_system(f'pip -q install jupytext nbstripout')
+_system(f'nbstripout "{NOTEBOOK}"')
 
 cfg = '''formats = "ipynb,py:percent"
 cell_metadata_filter = "-all,tags"
 notebook_metadata_filter = "kernelspec,jupytext"
 '''
-with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
+with open(cfg_path, "w", encoding="utf-8") as f:
     f.write(cfg)
+
+if IN_COLAB:
     
-ipynb_path = Path(NOTEBOOK)
-py_path = ipynb_path.with_suffix(".py")
+    ipynb_path = Path(NOTEBOOK)
+    py_path = ipynb_path.with_suffix(".py")
 
-if not ipynb_path.exists():
-    raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
+    if not ipynb_path.exists():
+        raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
 
-print("IPYNB:", ipynb_path)
-print("PY:", py_path)
+    print("IPYNB:", ipynb_path)
+    print("PY:", py_path)
 
-# !nbstripout "{NOTEBOOK}"
+    if py_path.exists():
+        py_path.unlink()
+    
+    _system(f'jupytext --to py:percent "{NOTEBOOK}"') 
 
-if py_path.exists():
-    py_path.unlink()
-# !jupytext --to py:percent "{NOTEBOOK}"
-
-import datetime
-stat = py_path.stat()
-print("\nОбновлён .py:", py_path)
+    import datetime
+    stat = py_path.stat()
+    print("\nОбновлён .py:", py_path)
+    
+else:
+    pass
