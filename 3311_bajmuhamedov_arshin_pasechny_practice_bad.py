@@ -853,21 +853,30 @@ print_info(df)
 
 # %%
 # !pip -q install jupytext nbstripout
+try:
+    from google.colab import drive
+    IN_COLAB = True
+except ImportError:
+    drive = None
+    IN_COLAB = False
 
-from google.colab import drive
-drive.mount('/content/drive')
-
-NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+if IN_COLAB:
+    drive.mount('/content/drive')
+    NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+    cfg_path = "/content/.jupytext.toml"
+else:
+    print("Пропускаем монтирование Google Drive")
+    NOTEBOOK = "3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+    cfg_path = ".jupytext.toml"
 
 cfg = '''formats = "ipynb,py:percent"
 cell_metadata_filter = "-all"
 notebook_metadata_filter = "kernelspec,jupytext"
 '''
-with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
+with open(cfg_path, "w", encoding="utf-8") as f:
     f.write(cfg)
 
-import os, pathlib, time, textwrap, subprocess, json
-ipynb_path = pathlib.Path(NOTEBOOK)
+ipynb_path = Path(NOTEBOOK)
 py_path = ipynb_path.with_suffix(".py")
 
 if not ipynb_path.exists():
@@ -882,6 +891,5 @@ if py_path.exists():
     py_path.unlink()
 # !jupytext --to py:percent "{NOTEBOOK}"
 
-import datetime
 stat = py_path.stat()
 print("\nОбновлён .py:", py_path)
