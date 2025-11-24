@@ -857,10 +857,8 @@ print_info(df)
 # %% [markdown]
 # # Сохранение изменений
 
-# %%
-
 # %% tags=["skip"]
-import os
+import os, sys
 import pathlib
 from pathlib import Path
 
@@ -871,41 +869,40 @@ try:
 except ImportError:
     IN_COLAB = False
 
-if IN_COLAB:
-    print("Running in Colab, executing Jupytext sync logic...")
+if not(IN_COLAB):
+    print("Environment is NOT Colab. Skipping sync logic.")
+    sys.exit(0)
+
+print("Running in Colab, executing Jupytext sync logic...")
+
+# !pip -q install jupytext nbstripout
+from google.colab import drive
+drive.mount('/content/drive')
+
+NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+
+cfg = '''formats = "ipynb,py:percent"
+cell_metadata_filter = "-all,tags"
+notebook_metadata_filter = "kernelspec,jupytext"
+'''
+with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
+    f.write(cfg)
     
-    !pip -q install jupytext nbstripout
-    from google.colab import drive
-    drive.mount('/content/drive')
-    
-    NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
-    
-    cfg = '''formats = "ipynb,py:percent"
-    cell_metadata_filter = "-all,tags"
-    notebook_metadata_filter = "kernelspec,jupytext"
-    '''
-    with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
-        f.write(cfg)
-        
-    ipynb_path = Path(NOTEBOOK)
-    py_path = ipynb_path.with_suffix(".py")
+ipynb_path = Path(NOTEBOOK)
+py_path = ipynb_path.with_suffix(".py")
 
-    if not ipynb_path.exists():
-        raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
+if not ipynb_path.exists():
+    raise FileNotFoundError(f"Не найден .ipynb: {ipynb_path}")
 
-    print("IPYNB:", ipynb_path)
-    print("PY:", py_path)
+print("IPYNB:", ipynb_path)
+print("PY:", py_path)
 
-    !nbstripout "{NOTEBOOK}"
+# !nbstripout "{NOTEBOOK}"
 
-    if py_path.exists():
-        py_path.unlink()
-    !jupytext --to py:percent "{NOTEBOOK}"
+if py_path.exists():
+    py_path.unlink()
+# !jupytext --to py:percent "{NOTEBOOK}"
 
-    import datetime
-    stat = py_path.stat()
-    print("\nОбновлён .py:", py_path)
-
-else:
-    print("Environment is NOT Colab (GitHub Actions detected). Skipping sync logic.")
-    pass
+import datetime
+stat = py_path.stat()
+print("\nОбновлён .py:", py_path)
