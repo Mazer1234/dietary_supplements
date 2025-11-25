@@ -343,9 +343,6 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
-    return None
-
-
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
@@ -619,7 +616,7 @@ print_info(df)
 # Посмотрим как выглядит датафрейм на данный момент
 
 # %%
-df_copy.head()
+df.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
@@ -1030,9 +1027,16 @@ df.head()
 # # Сохранение изменений
 
 # %%
-import os
+import os, sys
 import pathlib
 from pathlib import Path
+
+try:
+    _system = get_ipython().system
+except NameError:
+    import subprocess
+    def _system(cmd):
+        return subprocess.check_call(cmd, shell=True)
 
 IN_COLAB = False
 try:
@@ -1041,22 +1045,30 @@ try:
 except ImportError:
     IN_COLAB = False
 
-if IN_COLAB:
+if not IN_COLAB:
+    print("Окружение не Colab. Настройка на безопасную версию")
+    NOTEBOOK = "3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+    cfg_path = ".jupytext.toml"
+else:
     print("Running in Colab, executing Jupytext sync logic...")
-
-    # !pip -q install jupytext nbstripout
+    
     from google.colab import drive
     drive.mount('/content/drive')
-
+    
     NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
+    cfg_path = "/content/.jupytext.toml"
+    
+_system(f'pip -q install jupytext nbstripout')
+_system(f'nbstripout "{NOTEBOOK}"')
 
-    cfg = '''formats = "ipynb,py:percent"
-    cell_metadata_filter = "-all,tags"
-    notebook_metadata_filter = "kernelspec,jupytext"
-    '''
-    with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
-        f.write(cfg)
+cfg = '''formats = "ipynb,py:percent"
+cell_metadata_filter = "-all,tags"
+notebook_metadata_filter = "kernelspec,jupytext"
+'''
+with open(cfg_path, "w", encoding="utf-8") as f:
+    f.write(cfg)
 
+if IN_COLAB:    
     ipynb_path = Path(NOTEBOOK)
     py_path = ipynb_path.with_suffix(".py")
 
@@ -1065,20 +1077,18 @@ if IN_COLAB:
 
     print("IPYNB:", ipynb_path)
     print("PY:", py_path)
-
-    # !nbstripout "{NOTEBOOK}"
-
+    
+    _system(f'nbstripout "{NOTEBOOK}"')
+    
     if py_path.exists():
         py_path.unlink()
-    # !jupytext --to py:percent "{NOTEBOOK}"
+    
+    _system(f'jupytext --to py:percent "{NOTEBOOK}"') 
 
     import datetime
     stat = py_path.stat()
     print("\nОбновлён .py:", py_path)
-
+    
 else:
-    print("Environment is NOT Colab (GitHub Actions detected). Skipping sync logic.")
     pass
 
-
-# %%
