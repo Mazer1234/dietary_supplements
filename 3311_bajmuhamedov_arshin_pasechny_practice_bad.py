@@ -8,7 +8,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.17.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3
 #     name: python3
@@ -343,6 +343,7 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
+
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
@@ -615,8 +616,6 @@ print_info(df)
 # %% [markdown]
 # Посмотрим как выглядит датафрейм на данный момент
 
-# %%
-df.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
@@ -842,17 +841,200 @@ for col in sys_org:
 for col in group_people:
   df = df.drop(col, axis=1)
 
+# %%
+df.head()
+
+# %%
+print_info(df)
+
 # %% [markdown]
-# Посмотрим как сейчас выглядит датафрейм
+# Добавим парсинг столбца сырье на ингредиент_описание, ингредиент_рус, ингредиент_лат
+
+# %% [markdown]
+# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
+
+# %%
+import re
+
+# Парсим строку с сырьем
+def parse_ingredient_string(raw_string):
+  if pd.isna(raw_string) or not raw_string.strip():
+    return []
+
+  ingredients = []
+  current = []
+  bracket_count = 0
+  quote_count = 0
+
+  for char in raw_string:
+    if char == '(':
+      bracket_count += 1
+    elif char == ')':
+      bracket_count -= 1
+    elif char == '"':
+      quote_count = 1 - quote_count
+
+    if char == ',' and bracket_count == 0 and quote_count == 0:
+      ingredient_str = ''.join(current).strip()
+      if ingredient_str:
+        ingredients.append(ingredient_str)
+      current = []
+    else:
+      current.append(char)
+
+  if current:
+    ingredient_str = ''.join(current).strip()
+    if ingredient_str:
+      ingredients.append(ingredient_str)
+
+  return ingredients
+
+
+# %% [markdown]
+# Функция точно определяет, где русское название, а где латинское
+
+# %%
+def detect_language(text):
+    cyrillic_count = len(re.findall(r'[а-яА-Я]', text))
+    latin_count = len(re.findall(r'[a-zA-Z]', text))
+
+    if cyrillic_count > latin_count:
+        return 'russian'
+    elif latin_count > cyrillic_count:
+        return 'latin'
+    else:
+        # Если равное количество символов или оба нуля, используем дополнительные признаки
+        if re.search(r'[а-яА-Я]', text):
+            return 'russian'
+        elif re.search(r'[a-zA-Z]', text):
+            return 'latin'
+        return 'unknown'
+
+
+# %% [markdown]
+# Функция для парсинга отдельного ингредиента на 3 компонента
+
+# %%
+def parse_single_ingredient(ingredient):
+    ingredient = str(ingredient).strip()
+
+    if ingredient in ['nan', 'None', '']:
+        return (pd.NA, pd.NA, pd.NA)
+
+    if '(' in ingredient and ')' not in ingredient:
+        ingredient = ingredient + ')'
+    pattern1 = r'^(.+?)\s*\(([^()]+?)\s*[–\-—]\s*([^()]+?)\)\s*\.?$'
+    match1 = re.match(pattern1, ingredient)
+
+    if 'содержит бактерии' in ingredient:
+      return (ingredient, pd.NA, pd.NA)
+    if match1:
+        description = match1.group(1).strip()
+        first_part = match1.group(2).strip()
+        second_part = match1.group(3).strip()
+
+        description = description.rstrip('.')
+        first_part = first_part.rstrip('.').strip('–').strip()
+        second_part = second_part.rstrip('.').strip('–').strip()
+
+        # Определяем язык для каждой части
+        lang_first = detect_language(first_part)
+        lang_second = detect_language(second_part)
+
+        if lang_first == 'russian' and lang_second == 'latin':
+            return (description, first_part, second_part)
+        elif lang_first == 'latin' and lang_second == 'russian':
+            if bool(re.search(r'[a-zA-Z]', second_part)) and ingredient.count("-") == 2:
+              first_part += "-" + second_part[:second_part.find("-")]
+              second_part = second_part[second_part.find("-")+1:]
+            return (description, second_part, first_part)
+
+        return (description, second_part, first_part)
+
+    pattern2 = r'^(.+?)\s*\(([^()]+?)\)\s*\.?$'
+    match2 = re.match(pattern2, ingredient)
+
+    if match2:
+        description = match2.group(1).strip()
+        content = match2.group(2).strip()
+
+        has_latin = bool(re.search(r'[a-zA-Z]', content))
+        has_cyrillic = bool(re.search(r'[а-яА-Я]', content))
+
+        description = description.rstrip('.')
+        content = content.rstrip('.').strip('–').strip()
+
+        if has_latin and not has_cyrillic:
+          return (description, pd.NA, content)
+        elif has_cyrillic and not has_latin:
+            return (description, content, pd.NA)
+        else:
+            return (description, content, pd.NA)
+
+    ingredient = ingredient.rstrip('.')
+    return (ingredient, pd.NA, pd.NA)
+
+
+# %%
+df['сырье'].isna().sum()
+
+# %%
+df["ингредиент_описание"] = pd.NA
+df["ингредиент_рус"] = pd.NA
+df["ингредиент_лат"] = pd.NA
+
+for row in range(len(df)):
+    raw_value = df.at[row, "сырье"]
+
+    if pd.isna(raw_value) or str(raw_value).strip() in ['', 'nan', 'None']:
+        df.at[row, "ингредиент_описание"] = pd.NA
+        df.at[row, "ингредиент_рус"] = pd.NA
+        df.at[row, "ингредиент_лат"] = pd.NA
+        continue
+
+    string = str(raw_value).strip()
+    ingredients = parse_ingredient_string(string)
+
+    if not ingredients:
+        description, russian, latin = parse_single_ingredient(string)
+        df.at[row, "ингредиент_описание"] = description
+        df.at[row, "ингредиент_рус"] = russian
+        df.at[row, "ингредиент_лат"] = latin
+
+    else:
+        description_list = []
+        russian_list = []
+        latin_list = []
+
+        for ingredient in ingredients:
+            description, russian, latin = parse_single_ingredient(ingredient)
+            if description:
+                description_list.append(description)
+            if pd.notna(russian):
+                russian_list.append(russian)
+            if pd.notna(latin):
+                latin_list.append(latin)
+
+        df.at[row, "ингредиент_описание"] = ", ".join(description_list) if description_list else pd.NA
+        df.at[row, "ингредиент_рус"] = ", ".join(russian_list) if russian_list else pd.NA
+        df.at[row, "ингредиент_лат"] = ", ".join(latin_list) if latin_list else pd.NA
 
 # %%
 df.head()
 
+# %%
+df.columns
+
 # %% [markdown]
-# Выведем суммарную информацци о датафрейме
+# Удаление строк с отсутствующим сырьем
 
 # %%
-print_info(df)
+indx_for_drop = []
+for i in range(len(df)):
+  if "Синтетическое" not in str(df.at[i, "происхождение_природное_синтетическое"]) and pd.isna(df.at[i, "сырье"]):
+    indx_for_drop.append(i)
+
+df = df.drop(indx_for_drop)
 
 # %% [markdown]
 # # Сохранение изменений
