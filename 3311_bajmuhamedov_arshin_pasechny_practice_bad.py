@@ -1039,7 +1039,6 @@ df = df.drop(indx_for_drop)
 # %% [markdown]
 # # Сохранение изменений
 
-# %%
 # %% tags=["skip"]
 import os, sys
 import pathlib
