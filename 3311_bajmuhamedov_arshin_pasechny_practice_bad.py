@@ -1026,7 +1026,7 @@ df.head()
 # %% [markdown]
 # # Сохранение изменений
 
-# %%
+# %% tags=["skip"]
 import os, sys
 import pathlib
 from pathlib import Path
@@ -1091,4 +1091,3 @@ if IN_COLAB:
     
 else:
     pass
-
