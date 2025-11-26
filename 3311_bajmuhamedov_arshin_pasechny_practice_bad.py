@@ -343,6 +343,9 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
+    return None
+
+
 # %% [markdown]
 # Посмотрим суммарную  информацию о датафрейме
 
@@ -616,7 +619,7 @@ print_info(df)
 # Посмотрим как выглядит датафрейм на данный момент
 
 # %%
-df.head()
+df_copy.head()
 
 # %% [markdown]
 # Вопросы на рассмотрение:
@@ -920,7 +923,7 @@ def parse_single_ingredient(ingredient):
     ingredient = str(ingredient).strip()
 
     if ingredient in ['nan', 'None', '']:
-        return ("", "", "")
+        return (pd.NA, pd.NA, pd.NA)
 
     if '(' in ingredient and ')' not in ingredient:
         ingredient = ingredient + ')'
@@ -1023,20 +1026,27 @@ for row in range(len(df)):
 # %%
 df.head()
 
+# %%
+df.columns
+
+# %% [markdown]
+# Удаление строк с отсутствующим сырьем
+
+# %%
+indx_for_drop = []
+for i in range(len(df)):
+  if "Синтетическое" not in str(df.at[i, "происхождение_природное_синтетическое"]) and pd.isna(df.at[i, "сырье"]):
+    indx_for_drop.append(i)
+
+df = df.drop(indx_for_drop)
+
 # %% [markdown]
 # # Сохранение изменений
 
-# %% tags=["skip"]
-import os, sys
+# %%
+import os
 import pathlib
 from pathlib import Path
-
-try:
-    _system = get_ipython().system
-except NameError:
-    import subprocess
-    def _system(cmd):
-        return subprocess.check_call(cmd, shell=True)
 
 IN_COLAB = False
 try:
@@ -1045,30 +1055,22 @@ try:
 except ImportError:
     IN_COLAB = False
 
-if not IN_COLAB:
-    print("Окружение не Colab. Настройка на безопасную версию")
-    NOTEBOOK = "3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
-    cfg_path = ".jupytext.toml"
-else:
+if IN_COLAB:
     print("Running in Colab, executing Jupytext sync logic...")
-    
+
+    # !pip -q install jupytext nbstripout
     from google.colab import drive
     drive.mount('/content/drive')
-    
+
     NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
-    cfg_path = "/content/.jupytext.toml"
-    
-_system(f'pip -q install jupytext nbstripout')
-_system(f'nbstripout "{NOTEBOOK}"')
 
-cfg = '''formats = "ipynb,py:percent"
-cell_metadata_filter = "-all,tags"
-notebook_metadata_filter = "kernelspec,jupytext"
-'''
-with open(cfg_path, "w", encoding="utf-8") as f:
-    f.write(cfg)
+    cfg = '''formats = "ipynb,py:percent"
+    cell_metadata_filter = "-all,tags"
+    notebook_metadata_filter = "kernelspec,jupytext"
+    '''
+    with open("/content/.jupytext.toml", "w", encoding="utf-8") as f:
+        f.write(cfg)
 
-if IN_COLAB:    
     ipynb_path = Path(NOTEBOOK)
     py_path = ipynb_path.with_suffix(".py")
 
@@ -1077,17 +1079,20 @@ if IN_COLAB:
 
     print("IPYNB:", ipynb_path)
     print("PY:", py_path)
-    
-    _system(f'nbstripout "{NOTEBOOK}"')
-    
+
+    # !nbstripout "{NOTEBOOK}"
+
     if py_path.exists():
         py_path.unlink()
-    
-    _system(f'jupytext --to py:percent "{NOTEBOOK}"') 
+    # !jupytext --to py:percent "{NOTEBOOK}"
 
     import datetime
     stat = py_path.stat()
     print("\nОбновлён .py:", py_path)
-    
+
 else:
+    print("Environment is NOT Colab (GitHub Actions detected). Skipping sync logic.")
     pass
+
+
+# %%
