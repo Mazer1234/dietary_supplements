@@ -342,6 +342,7 @@ def print_info(df):
     from tabulate import tabulate
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
+
 # %% [markdown]
 # Напишем функцию, которая заменяет значение из списка в строке столбца на заданное значение. Таким образом, заменим:
 # - орфографические ошибки
@@ -825,10 +826,10 @@ for col in group_people:
   df = df.drop(col, axis=1)
 
 # %% [markdown]
-# Разобьем данные в столбце "сырье" на новые столбцы:
-# - Описание необходимого сырья
-# - Название сырья на латинице
-# - Название сырья на кириллице
+# Добавим парсинг столбца сырье на ингредиент_описание, ингредиент_рус, ингредиент_лат
+
+# %% [markdown]
+# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
 
 # %%
 import re
@@ -867,6 +868,9 @@ def parse_ingredient_string(raw_string):
   return ingredients
 
 
+# %% [markdown]
+# Функция точно определяет, где русское название, а где латинское
+
 # %%
 def detect_language(text):
     cyrillic_count = len(re.findall(r'[а-яА-Я]', text))
@@ -884,6 +888,9 @@ def detect_language(text):
             return 'latin'
         return 'unknown'
 
+
+# %% [markdown]
+# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
 
 # %%
 def parse_single_ingredient(ingredient):
@@ -1539,7 +1546,6 @@ export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight
     curve_scale=0.25,
     label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
 )
-
 
 # %% [markdown]
 # # Сохранение изменений
