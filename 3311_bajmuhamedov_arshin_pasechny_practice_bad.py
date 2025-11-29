@@ -916,7 +916,7 @@ def detect_language(text):
 
 # %%
 def parse_single_ingredient(ingredient):
-    ingredient = str(ingredient).strip()
+    ingredient = str(ingredient).strip().lower()
 
     if ingredient in ['nan', 'None', '']:
         return (pd.NA, pd.NA, pd.NA)
@@ -992,7 +992,7 @@ for row in range(len(df)):
         df.at[row, "ингредиент_лат"] = pd.NA
         continue
 
-    string = str(raw_value).strip()
+    string = str(raw_value).strip().lower()
     ingredients = parse_ingredient_string(string)
 
     if not ingredients:
@@ -1036,6 +1036,182 @@ for i in range(len(df)):
 
 df = df.drop(indx_for_drop)
 
+
+# %% [markdown]
+# Функция для извлечения ингредиентов из строки описания
+
+# %%
+def extract_ingredients(description):
+    if pd.isna(description) or description == "":
+        return []
+
+    # Удаляем содержимое в скобках
+    description_clean = re.sub(r'\([^)]*\)', '', str(description)).lower()
+
+    # Разделяем по запятым и очищаем от лишних пробелов
+    ingredients = [ing.strip().lower() for ing in description_clean.split(',')]
+
+    # Удаляем пустые строки и строки, содержащие только знаки препинания
+    ingredients = [ing for ing in ingredients if ing and ing.strip()]
+
+    return ingredients
+
+
+# %% [markdown]
+# Удаление дополнительных кавычек и точек
+
+# %%
+def clean_ingredient_name(ingredient):
+    # Удаляем кавычки в начале и конце
+    ingredient = re.sub(r'^["\']|["\']$', '', ingredient)
+    # Удаляем точки в конце
+    ingredient = re.sub(r'\.$', '', ingredient)
+    # Удаляем лишние пробелы
+    ingredient = ingredient.strip()
+    return ingredient
+
+
+# %%
+# Поиск строк с вариантами 5-HTP в столбце описания
+print("СТРОКИ С ВАРИАНТАМИ 5-HTP")
+print("=" * 50)
+
+# Варианты для поиска
+variants = ['5 htp', '5-гидрокситриптофан', '5-нтр', '5-нтп', '5-htp']
+
+for variant in variants:
+    print(f"\n=== Строки с '{variant}' ===")
+
+    # Ищем в столбце описания
+    mask = df['ингредиент_описание'].astype(str).str.contains(variant, case=False, na=False)
+    matches = df[mask]
+
+    print(f"Найдено строк: {len(matches)}")
+
+    if len(matches) > 0:
+        for idx, row in matches.iterrows():
+            print(f"\nСтрока {idx}:")
+            print(f"  {row['ингредиент_описание']}")
+    else:
+        print("  Не найдено")
+
+# Сводка всех строк с любым вариантом
+print("\n" + "="*60)
+print("ВСЕ СТРОКИ С ЛЮБЫМ ВАРИАНТОМ 5-HTP")
+print("="*60)
+
+# Создаем маску для всех вариантов
+all_matches_mask = False
+for variant in variants:
+    mask = df['ингредиент_описание'].astype(str).str.contains(variant, case=False, na=False)
+    all_matches_mask = all_matches_mask | mask
+
+all_matches = df[all_matches_mask]
+
+print(f"Всего строк с любым вариантом 5-HTP: {len(all_matches)}\n")
+
+# Выводим все строки с указанием, какие варианты найдены
+for idx, row in all_matches.iterrows():
+    found_variants = []
+    for variant in variants:
+        if variant in str(row['ингредиент_описание']).lower():
+            found_variants.append(variant)
+
+    print(f"--- Строка {idx} ---")
+    print(f"Описание: {row['ингредиент_описание']}")
+    print(f"Найденные варианты: {', '.join(found_variants)}")
+    print()
+
+# %% [markdown]
+# Замена вариаций одного и того же ингредиента на одно значение
+
+# %%
+target_ingredients = ['5 htp', '5-гидрокситриптофан', '5-нтр', '5-нтп']
+replace_exact(df, 'ингредиент_описание', target_ingredients, '5 htp')
+
+replace_exact(df, 'ингредиент_описание', ['5 htp'], '5-гидрокситриптофан')
+
+# %% [markdown]
+# Извлекаем все ингредиенты из описания
+#
+
+# %%
+df['ингредиенты_список'] = df['ингредиент_описание'].apply(extract_ingredients)
+df['ингредиенты_список'] = df['ингредиенты_список'].apply(
+    lambda x: [clean_ingredient_name(ing) for ing in x if clean_ingredient_name(ing)]
+)
+
+
+# %%
+all_ingredients = set()
+for ingredient_list in df['ингредиенты_список']:
+  all_ingredients.update(ingredient_list)
+
+all_ingredients = sorted(list(all_ingredients))
+print(f"Всего уникальных значений: {len(all_ingredients)}")
+all_ingredients.remove("\\")
+print("Игредиенты:", all_ingredients[:100])
+
+
+# %%
+# Функция для поиска и подсчета конкретных ингредиентов
+def count_specific_ingredients(df, target_ingredients):
+    """
+    Подсчитывает количество вхождений конкретных ингредиентов
+    """
+    results = {}
+
+    for target_ingredient in target_ingredients:
+        count = 0
+        # Проходим по всем спискам ингредиентов
+        for ingredients_list in df['ингредиенты_список']:
+            if target_ingredient in ingredients_list:
+                count += 1
+        results[target_ingredient] = count
+
+    return results
+
+# Ингредиенты которые мы хотим посчитать
+target_ingredients = ['5 htp', '5-гидрокситриптофан', '5-нтр', '5-нтп']
+
+# Подсчитываем
+ingredient_counts = count_specific_ingredients(df, target_ingredients)
+
+# Выводим результаты
+print("КОЛИЧЕСТВО КОНКРЕТНЫХ ИНГРЕДИЕНТОВ:")
+print("=" * 40)
+for ingredient, count in ingredient_counts.items():
+    print(f"'{ingredient}': {count}")
+
+# %% [markdown]
+# Создаем матрицу ингредиентов и корреляций
+
+# %%
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+mlb = MultiLabelBinarizer()
+ingredient_matrix = mlb.fit_transform(df['ингредиенты_список'])
+ingredient_df = pd.DataFrame(ingredient_matrix, columns=mlb.classes_)
+
+# Только ингредиенты, встречающиеся >= 5 раз
+frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= 10]
+filtered_df = ingredient_df[frequent_ingredients]
+
+# Корреляция и визуализация
+corr_matrix = pd.DataFrame(
+    cosine_similarity(filtered_df.T),
+    index=frequent_ingredients,
+    columns=frequent_ingredients
+)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_matrix, cmap='coolwarm', center=0)
+plt.title('Корреляции между ингредиентами (встречаются ≥10 раз)')
+plt.show()
+
+print(f"Проанализировано {len(frequent_ingredients)} ингредиентов")
+
 # %% [markdown]
 # # Сохранение изменений
 
@@ -1064,13 +1240,13 @@ if not IN_COLAB:
     cfg_path = ".jupytext.toml"
 else:
     print("Running in Colab, executing Jupytext sync logic...")
-    
+
     from google.colab import drive
     drive.mount('/content/drive')
-    
+
     NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
     cfg_path = "/content/.jupytext.toml"
-    
+
 _system(f'pip -q install jupytext nbstripout')
 _system(f'nbstripout "{NOTEBOOK}"')
 
@@ -1081,7 +1257,7 @@ notebook_metadata_filter = "kernelspec,jupytext"
 with open(cfg_path, "w", encoding="utf-8") as f:
     f.write(cfg)
 
-if IN_COLAB:    
+if IN_COLAB:
     ipynb_path = Path(NOTEBOOK)
     py_path = ipynb_path.with_suffix(".py")
 
@@ -1090,17 +1266,17 @@ if IN_COLAB:
 
     print("IPYNB:", ipynb_path)
     print("PY:", py_path)
-    
+
     _system(f'nbstripout "{NOTEBOOK}"')
-    
+
     if py_path.exists():
         py_path.unlink()
-    
-    _system(f'jupytext --to py:percent "{NOTEBOOK}"') 
+
+    _system(f'jupytext --to py:percent "{NOTEBOOK}"')
 
     import datetime
     stat = py_path.stat()
     print("\nОбновлён .py:", py_path)
-    
+
 else:
     pass
