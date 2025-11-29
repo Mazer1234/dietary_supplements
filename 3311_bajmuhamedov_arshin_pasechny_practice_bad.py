@@ -58,7 +58,6 @@ def load_from_yandex(public_key, file_type='auto'):
 
     # Определяем тип файла
     if file_type == 'auto':
-        # По расширению в URL
         if 'text' in file_response.headers.get('content-type', '') or download_url.endswith(('.txt', '.csv')):
             file_type = 'text'
         elif download_url.endswith(('.xlsx', '.xls')):
@@ -75,13 +74,8 @@ def load_from_yandex(public_key, file_type='auto'):
                 name, value = line.split(':', 1)
                 corrections[name.strip()] = int(value.strip())
         return corrections
-
-    elif file_type == 'excel':
-        # Возвращаем бинарные данные для Excel
-        return file_response.content
-
     else:
-        # Для всех остальных файлов возвращаем бинарные данные
+        # Для excel и binary возвращаем бинарные данные
         return file_response.content
 
 
