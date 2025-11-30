@@ -894,7 +894,7 @@ def detect_language(text):
 
 # %%
 def parse_single_ingredient(ingredient):
-    ingredient = str(ingredient).strip()
+    ingredient = str(ingredient).strip().lower()
 
     if ingredient in ['nan', 'None', '']:
         return (pd.NA, pd.NA, pd.NA)
@@ -1004,6 +1004,91 @@ for i in range(len(df)):
     indx_for_drop.append(i)
 
 df = df.drop(indx_for_drop)
+
+
+# %% [markdown]
+# Функция для извлечения ингредиентов из строки описания
+
+# %%
+def extract_ingredients(description):
+    if pd.isna(description) or description == "":
+        return []
+
+    # Удаляем содержимое в скобках
+    description_clean = re.sub(r'\([^)]*\)', '', str(description)).lower()
+
+    # Разделяем по запятым и очищаем от лишних пробелов
+    ingredients = [ing.strip().lower() for ing in description_clean.split(',')]
+
+    # Удаляем пустые строки и строки, содержащие только знаки препинания
+    ingredients = [ing for ing in ingredients if ing and ing.strip()]
+
+    return ingredients
+
+
+# %% [markdown]
+# Удаление дополнительных кавычек и точек
+
+# %%
+def clean_ingredient_name(ingredient):
+    # Удаляем кавычки в начале и конце
+    ingredient = re.sub(r'^["\']|["\']$', '', ingredient)
+    # Удаляем точки в конце
+    ingredient = re.sub(r'\.$', '', ingredient)
+    # Удаляем лишние пробелы
+    ingredient = ingredient.strip()
+    return ingredient
+
+
+# %% [markdown]
+# Извлекаем все ингредиенты из описания
+#
+
+# %%
+df['ингредиенты_список'] = df['ингредиент_описание'].apply(extract_ingredients)
+df['ингредиенты_список'] = df['ингредиенты_список'].apply(
+    lambda x: [clean_ingredient_name(ing) for ing in x if clean_ingredient_name(ing)]
+)
+
+
+# %%
+all_ingredients = set()
+for ingredient_list in df['ингредиенты_список']:
+  all_ingredients.update(ingredient_list)
+
+all_ingredients = sorted(list(all_ingredients))
+print(f"Всего уникальных значений: {len(all_ingredients)}")
+all_ingredients.remove("\\")
+print("Игредиенты:", all_ingredients[:100])
+
+# %% [markdown]
+# Создаем матрицу ингредиентов и корреляций
+
+# %%
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+mlb = MultiLabelBinarizer()
+ingredient_matrix = mlb.fit_transform(df['ингредиенты_список'])
+ingredient_df = pd.DataFrame(ingredient_matrix, columns=mlb.classes_)
+
+# Только ингредиенты, встречающиеся >= 10 раз
+frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= 10]
+filtered_df = ingredient_df[frequent_ingredients]
+
+# Корреляция и визуализация
+corr_matrix = pd.DataFrame(
+    cosine_similarity(filtered_df.T),
+    index=frequent_ingredients,
+    columns=frequent_ingredients
+)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_matrix, cmap='coolwarm', center=0)
+plt.title('Корреляции между ингредиентами (встречаются ≥10 раз)')
+plt.show()
+
+print(f"Проанализировано {len(frequent_ingredients)} ингредиентов")
 
 # %% [markdown]
 # Перейдем к построению графов. Начнём с графов двойной композиции.
