@@ -1071,66 +1071,6 @@ def clean_ingredient_name(ingredient):
     return ingredient
 
 
-# %%
-# Поиск строк с вариантами 5-HTP в столбце описания
-print("СТРОКИ С ВАРИАНТАМИ 5-HTP")
-print("=" * 50)
-
-# Варианты для поиска
-variants = ['5 htp', '5-гидрокситриптофан', '5-нтр', '5-нтп', '5-htp']
-
-for variant in variants:
-    print(f"\n=== Строки с '{variant}' ===")
-
-    # Ищем в столбце описания
-    mask = df['ингредиент_описание'].astype(str).str.contains(variant, case=False, na=False)
-    matches = df[mask]
-
-    print(f"Найдено строк: {len(matches)}")
-
-    if len(matches) > 0:
-        for idx, row in matches.iterrows():
-            print(f"\nСтрока {idx}:")
-            print(f"  {row['ингредиент_описание']}")
-    else:
-        print("  Не найдено")
-
-# Сводка всех строк с любым вариантом
-print("\n" + "="*60)
-print("ВСЕ СТРОКИ С ЛЮБЫМ ВАРИАНТОМ 5-HTP")
-print("="*60)
-
-# Создаем маску для всех вариантов
-all_matches_mask = False
-for variant in variants:
-    mask = df['ингредиент_описание'].astype(str).str.contains(variant, case=False, na=False)
-    all_matches_mask = all_matches_mask | mask
-
-all_matches = df[all_matches_mask]
-
-print(f"Всего строк с любым вариантом 5-HTP: {len(all_matches)}\n")
-
-# Выводим все строки с указанием, какие варианты найдены
-for idx, row in all_matches.iterrows():
-    found_variants = []
-    for variant in variants:
-        if variant in str(row['ингредиент_описание']).lower():
-            found_variants.append(variant)
-
-    print(f"--- Строка {idx} ---")
-    print(f"Описание: {row['ингредиент_описание']}")
-    print(f"Найденные варианты: {', '.join(found_variants)}")
-    print()
-
-# %% [markdown]
-# Замена вариаций одного и того же ингредиента на одно значение
-
-# %%
-target_ingredients = ['5 htp', '5-гидрокситриптофан', '5-нтр', '5-нтп']
-replace_exact(df, 'ингредиент_описание', target_ingredients, '5 htp')
-
-replace_exact(df, 'ингредиент_описание', ['5 htp'], '5-гидрокситриптофан')
-
 # %% [markdown]
 # Извлекаем все ингредиенты из описания
 #
@@ -1152,37 +1092,6 @@ print(f"Всего уникальных значений: {len(all_ingredients)}
 all_ingredients.remove("\\")
 print("Игредиенты:", all_ingredients[:100])
 
-
-# %%
-# Функция для поиска и подсчета конкретных ингредиентов
-def count_specific_ingredients(df, target_ingredients):
-    """
-    Подсчитывает количество вхождений конкретных ингредиентов
-    """
-    results = {}
-
-    for target_ingredient in target_ingredients:
-        count = 0
-        # Проходим по всем спискам ингредиентов
-        for ingredients_list in df['ингредиенты_список']:
-            if target_ingredient in ingredients_list:
-                count += 1
-        results[target_ingredient] = count
-
-    return results
-
-# Ингредиенты которые мы хотим посчитать
-target_ingredients = ['5 htp', '5-гидрокситриптофан', '5-нтр', '5-нтп']
-
-# Подсчитываем
-ingredient_counts = count_specific_ingredients(df, target_ingredients)
-
-# Выводим результаты
-print("КОЛИЧЕСТВО КОНКРЕТНЫХ ИНГРЕДИЕНТОВ:")
-print("=" * 40)
-for ingredient, count in ingredient_counts.items():
-    print(f"'{ingredient}': {count}")
-
 # %% [markdown]
 # Создаем матрицу ингредиентов и корреляций
 
@@ -1194,7 +1103,7 @@ mlb = MultiLabelBinarizer()
 ingredient_matrix = mlb.fit_transform(df['ингредиенты_список'])
 ingredient_df = pd.DataFrame(ingredient_matrix, columns=mlb.classes_)
 
-# Только ингредиенты, встречающиеся >= 5 раз
+# Только ингредиенты, встречающиеся >= 10 раз
 frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= 10]
 filtered_df = ingredient_df[frequent_ingredients]
 
