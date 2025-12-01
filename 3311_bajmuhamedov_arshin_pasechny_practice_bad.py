@@ -980,8 +980,15 @@ for row in range(len(df)):
 # Удалим строки, у которых природное происхождение, но отсутствуют данные о сырье
 
 # %%
-print_info(df)
+indx_for_drop = []
+for i in range(len(df)):
+  if "Синтетическое" not in str(df.at[i, "происхождение_природное_синтетическое"]) and pd.isna(df.at[i, "сырье"]):
+    indx_for_drop.append(i)
 
+df = df.drop(indx_for_drop)
+
+# %%
+print_info(df)
 
 # %% [markdown]
 # Функция для извлечения ингредиентов из строки описания
