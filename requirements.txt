@@ -8,3 +8,4 @@ seaborn
 scipy
 jupyter
 nbconvert
+scikit-learn

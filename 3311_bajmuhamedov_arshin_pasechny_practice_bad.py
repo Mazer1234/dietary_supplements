@@ -25,36 +25,106 @@
 # - Петруша Полина Георгиевна
 
 # %% [markdown]
-# Скачаем датасет с Яндекс.Диска
+# Подключаем библиотеки
 
 # %%
 import requests
 from urllib.parse import urlencode
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import re
+from collections import Counter, defaultdict
+from tabulate import tabulate
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import pearsonr
 
-base_url = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?'
+
+# %% [markdown]
+# Функция для скачивания файлов с Яндекс.Диска
+
+# %%
+def load_from_yandex(public_key, file_type='auto'):
+    base_url = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?'
+    final_url = base_url + urlencode(dict(public_key=public_key))
+
+    # Получаем ссылку для скачивания
+    response = requests.get(final_url)
+    download_url = response.json()['href']
+
+    # Скачиваем файл
+    file_response = requests.get(download_url)
+
+    # Определяем тип файла
+    if file_type == 'auto':
+        if 'text' in file_response.headers.get('content-type', '') or download_url.endswith(('.txt', '.csv')):
+            file_type = 'text'
+        elif download_url.endswith(('.xlsx', '.xls')):
+            file_type = 'excel'
+        else:
+            file_type = 'binary'
+
+    # Обрабатываем в зависимости от типа
+    if file_type == 'text':
+        content = file_response.content.decode('utf-8')
+        corrections = {}
+        for line in content.split('\n'):
+            if ':' in line:
+                name, value = line.split(':', 1)
+                corrections[name.strip()] = int(value.strip())
+        return corrections
+    else:
+        # Для excel и binary возвращаем бинарные данные
+        return file_response.content
+
+
+# %% [markdown]
+# Напишем функцию, выводящую суммарную информацию о датафрейме
+
+# %%
+def print_info(df):
+    analysis = []
+
+    for col in df.columns:
+        dtype = df[col].dtype
+        unique_count = df[col].nunique()
+        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
+
+        unique_values = df[col].dropna().unique()
+        if len(unique_values) <= 5:
+            unique_display = list(unique_values)
+        else:
+            unique_display = ">5 unique values"
+
+        analysis.append({
+            'столбец': col,
+            'тип': str(dtype),
+            'уникальных': unique_count,
+            'пропущено %': f"{missing_pct}%",
+            'уникальные значения': unique_display
+        })
+
+    result_df = pd.DataFrame(analysis)
+    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
+
+# %% [markdown]
+# Скачаем датасет с Яндекс.Диска
+
+# %%
 public_key = "https://disk.yandex.ru/d/V1sJpR-SUJ_b8A"
-
-final_url = base_url + urlencode(dict(public_key=public_key))
-response = requests.get(final_url)
-download_url = response.json()['href']
-
-download_response = requests.get(download_url)
+file_content = load_from_yandex(public_key)
 with open('dataset.xlsx', 'wb') as f:
-    f.write(download_response.content)
+    f.write(file_content)
 
 # %% [markdown]
 # Прочитаем в датафрейм наш файл
 
 # %%
-from pathlib import Path
-import pandas as pd
-import numpy as np
-
 xlsx_path = "dataset.xlsx"
 if not xlsx_path:
     raise FileNotFoundError("xlsx файл не найден")
 print("Найден XLSX:", xlsx_path)
-
 df = pd.read_excel(xlsx_path, sheet_name=0, header=[0,1])
 print("Данные загружены в df")
 
@@ -76,13 +146,11 @@ pd.set_option('display.max_rows', None)
 # %%
 df.head()
 
+
 # %% [markdown]
 # Соединим заголовки первого и второго уровня вместе. Также уберем пробелы между словами в столбцах, заменив их на "_" и приведем названия столбцов к нижнему регистру.
 
 # %%
-import re
-from collections import Counter, defaultdict
-
 def clean(s):
     if s is None: return ""
     s = str(s).replace("\n"," ").replace("\xa0"," ").strip()
@@ -103,7 +171,6 @@ cnt = Counter(flat); seen = defaultdict(int); uniq = []
 for n in flat:
     seen[n] += 1
     uniq.append(n if cnt[n] == 1 else f"{n}__{seen[n]}")
-
 df.columns = uniq
 
 # %% [markdown]
@@ -120,16 +187,14 @@ to_rename = {
     "система_органов_сердечно-сосудистая_система":"система_органов_сердечно_сосудистая_система",
     "система_органов_происхождение_природное_синтетическое":"происхождение_природное_синтетическое"
 }
-
 df = df.rename(columns=to_rename)
 
 # %% [markdown]
-# Создадим новый столбец "рекомендации_по_применению". Информацию для них берем из столбца Этикетка, затем отчищаем оттуда взятую инфу.
+# Создадим новый столбец "рекомендации_по_применению". Информацию для них берем из столбца "этикетка", затем очищаем оттуда взятую информацию.
 
 # %%
 df['рекомендации_по_применению'] = pd.NA
 dot = 0
-
 
 for row in range(len(df)):
     string = str(df.at[row, 'этикетка'])
@@ -175,12 +240,16 @@ for row in range(len(df)):
     df.at[row, 'этикетка'] = str_for_et
 
 # %% [markdown]
-# Создадим новый столбцы:
-# - Количество единиц на прием
-# - Количество приемов в день
-# - Суммарное количество единиц за период (Количество единиц на приеме * Количество приемов в день * Продолжительность приема)
+# Создадим новые столбцы:
+# - "количество единиц на прием"
+# - "количество приемов в день"
+# - "суммарное количество единиц за период" (количество единиц на приеме * количество приемов в день * продолжительность приема)
 
 # %%
+# Настройки для полного отображения текста
+pd.set_option('display.max_colwidth', None)  # Без ограничения ширины столбцов
+pd.set_option('display.max_rows', None)      # Показывать все строки
+
 df["количество_единиц_на_прием"] = pd.NA
 df["количество_приемов_в_день"] = pd.NA
 df["суммарное_количество_единиц_за_период"] = pd.NA
@@ -192,7 +261,6 @@ re_times_range = re.compile(r'(\d+)\s*-\s*(\d+)\s*раз', flags=re.IGNORECASE)
 re_times_single = re.compile(r'(\d+)\s*раз', flags=re.IGNORECASE)
 re_grams_inline = re.compile(r'\b(\d+)\s*(?:г\b|грамм\w*)', flags=re.IGNORECASE)
 re_ml = re.compile(r'\b(\d+)\s*мл\b(?!\s*питьевой воды)', flags=re.IGNORECASE)
-
 
 for i in range(len(df)):
     string_raw = str(df.at[i, 'рекомендации_по_применению'])
@@ -234,7 +302,6 @@ for i in range(len(df)):
     df.at[i, 'количество_единиц_на_прием'] = units
 
     # количество_приемов_в_день
-
     times = 1
     m = re_times_range.search(string)
     if m:
@@ -245,186 +312,18 @@ for i in range(len(df)):
             times = int(m.group(1))
     df.at[i, 'количество_приемов_в_день'] = times
 
-# Заменим некоторые неправильно обработанные строки вручную
-df.loc[39, 'количество_единиц_на_прием'] = 1
-df.loc[59, 'количество_единиц_на_прием'] = 2
-df.loc[91, 'количество_единиц_на_прием'] = 1
-df.loc[102, 'количество_единиц_на_прием'] = 6
-df.loc[178, 'количество_единиц_на_прием'] = 2
-df.loc[215, 'количество_единиц_на_прием'] = 2
-df.loc[222, 'количество_единиц_на_прием'] = 5
-df.loc[723, 'количество_единиц_на_прием'] = 4
-df.loc[928, 'количество_единиц_на_прием'] = 1
-df.loc[1207, 'количество_единиц_на_прием'] = 3
-df.loc[1219, 'количество_единиц_на_прием'] = 1
-df.loc[1262, 'количество_единиц_на_прием'] = 1
-df.loc[1263, 'количество_единиц_на_прием'] = 2
-df.loc[1264, 'количество_единиц_на_прием'] = 3
-df.loc[1265, 'количество_единиц_на_прием'] = 3
-df.loc[1289, 'количество_единиц_на_прием'] = 1
-df.loc[1492, 'количество_единиц_на_прием'] = 1
-df.loc[1693, 'количество_единиц_на_прием'] = 1
-df.loc[1785, 'количество_единиц_на_прием'] = 1
-df.loc[1786, 'количество_единиц_на_прием'] = 2
-df.loc[1855, 'количество_единиц_на_прием'] = 6
-df.loc[1884, 'количество_единиц_на_прием'] = 10
-df.loc[1991, 'количество_единиц_на_прием'] = 2
-df.loc[2117, 'количество_единиц_на_прием'] = 1
-df.loc[2325, 'количество_единиц_на_прием'] = 3
-df.loc[2391, 'количество_единиц_на_прием'] = 1
-df.loc[2487, 'количество_единиц_на_прием'] = 6
-df.loc[2517, 'количество_единиц_на_прием'] = 2
-df.loc[2518, 'количество_единиц_на_прием'] = 4
-df.loc[2523, 'количество_единиц_на_прием'] = 4
-df.loc[2524, 'количество_единиц_на_прием'] = 2
-df.loc[2531, 'количество_единиц_на_прием'] = 5
-df.loc[2545, 'количество_единиц_на_прием'] = 8
-df.loc[2598, 'количество_единиц_на_прием'] = 1
-df.loc[2675, 'количество_единиц_на_прием'] = 3
-df.loc[2724, 'количество_единиц_на_прием'] = 1
-df.loc[2729, 'количество_единиц_на_прием'] = 2
-df.loc[2843, 'количество_единиц_на_прием'] = 1
-df.loc[2857, 'количество_единиц_на_прием'] = 3
-df.loc[2859, 'количество_единиц_на_прием'] = 3
-df.loc[2889, 'количество_единиц_на_прием'] = 1
-df.loc[2894, 'количество_единиц_на_прием'] = 1
-df.loc[2895, 'количество_единиц_на_прием'] = 1
-df.loc[2900, 'количество_единиц_на_прием'] = 2
-df.loc[2902, 'количество_единиц_на_прием'] = 3
-df.loc[2937, 'количество_единиц_на_прием'] = 2
-df.loc[2951, 'количество_единиц_на_прием'] = 1
-df.loc[3028, 'количество_единиц_на_прием'] = 3
-df.loc[3314, 'количество_единиц_на_прием'] = 5
-df.loc[3470, 'количество_единиц_на_прием'] = 2
-df.loc[3649, 'количество_единиц_на_прием'] = 1
-df.loc[3660, 'количество_единиц_на_прием'] = 1
-df.loc[3960, 'количество_единиц_на_прием'] = 1
-df.loc[3963, 'количество_единиц_на_прием'] = 8
-df.loc[3965, 'количество_единиц_на_прием'] = 3
-df.loc[4026, 'количество_единиц_на_прием'] = 1
-df.loc[4103, 'количество_единиц_на_прием'] = 1
-df.loc[4141, 'количество_единиц_на_прием'] = 2
+yandex_url1 = "https://disk.yandex.ru/d/aai4Di0mdUuITw"
+yandex_url2 = "https://disk.yandex.ru/d/Su4aCUDzBKlWNA"
+corrections1 = load_from_yandex(yandex_url1)
+corrections2 = load_from_yandex(yandex_url2)
 
-df.loc[22, 'количество_приемов_в_день'] = 4
-df.loc[39, 'количество_приемов_в_день'] = 6
-df.loc[91, 'количество_приемов_в_день'] = 2
-df.loc[102, 'количество_приемов_в_день'] = 6
-df.loc[319, 'количество_приемов_в_день'] = 3
+for name, value in corrections1.items():
+    mask = df['наименование'] == name
+    df.loc[mask, 'количество_единиц_на_прием'] = value
 
-
-# %% [markdown]
-# Напишем функцию, выводящую суммарную информацию о датафрейме
-
-# %%
-def print_info(df):
-    analysis = []
-
-    for col in df.columns:
-        dtype = df[col].dtype
-        unique_count = df[col].nunique()
-        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
-
-        unique_values = df[col].dropna().unique()
-        if len(unique_values) <= 5:
-            unique_display = list(unique_values)
-        else:
-            unique_display = ">5 unique values"
-
-        analysis.append({
-            'столбец': col,
-            'тип': str(dtype),
-            'уникальных': unique_count,
-            'пропущено %': f"{missing_pct}%",
-            'уникальные значения': unique_display
-        })
-
-    result_df = pd.DataFrame(analysis)
-
-    from tabulate import tabulate
-    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
-
-
-# %% [markdown]
-# Посмотрим суммарную  информацию о датафрейме
-
-# %%
-print_info(df)
-
-# %% [markdown]
-# Объединение группы столбцов:
-#
-# - J-X: Биологически_активные_вещества
-# - Y-AL: Системы_органов
-# - AQ-AU: Группа_населения
-#
-# Они заносятся в отдельный датафрей и в дальнейшем добавляются к основному датафрейму
-
-# %% [markdown]
-# Сделаем список столбцов которые мы хотим объединить
-# 1. биологически_вещества
-# 2. системы_органов
-# 3. группа_населения
-
-# %%
-df_copy=df.copy()
-biolog_columns = [
-    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
-    "пищевые_вещества_макро_и_микроэлементы",
-    "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
-    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
-    "пищевые_вещества_углеводы_и_продукты_их_переработки",
-    "минорные_компоненты_растений_фенольные_соединения",
-    "минорные_компоненты_растений_алкалоиды",
-    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
-    "минорные_компоненты_растений_сапонины",
-    "минорные_компоненты_растений_терпеноиды",
-    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
-    "минорные_компоненты_растений_гидроксикоричные_кислоты",
-    "минорные_компоненты_растений_ферменты",
-    "минорные_компоненты_растений_дубильные_вещества",
-    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты"
-]
-
-sys_org = []
-for col in df.columns:
-    if col.startswith("система_органов"):
-        sys_org.append(col)
-
-group_people = []
-for col in df.columns:
-   if col.startswith("группа_населения"):
-    group_people.append(col)
-
-
-# %% [markdown]
-# Функция для объединения столбцов
-
-# %%
-def combine_columns(df, cols, name_map=None):
-    def get_values(row):
-        out = []
-        for col in cols:
-            val = row[col]
-            if isinstance(val, (int, float)) and val == 1:
-                pretty = name_map[col] if name_map and col in name_map else col
-                out.append(pretty)
-            elif isinstance(val, str) and val.strip():
-                out.append(val.strip())
-        if not out:
-            return None
-
-        return ", ".join(dict.fromkeys(out))
-    return df.apply(get_values, axis=1)
-
-
-# %%
-df_bi=combine_columns(df_copy, biolog_columns, "биологически_активные_вещества")
-df_sy=combine_columns(df_copy, sys_org, "системы_органов")
-df_gr=combine_columns(df_copy, group_people, "группа_населения")
-
-df_save=pd.DataFrame({
-    "биологически_активные_вещества": df_bi,"системы_органы": df_sy,"группы_населения": df_gr})
-
+for name, value in corrections2.items():
+    mask = df['наименование'] == name
+    df.loc[mask, 'количество_приемов_в_день'] = value
 
 # %% [markdown]
 # Напишем функцию, которая заменяет значение из списка в строке столбца на заданное значение. Таким образом, заменим:
@@ -517,8 +416,91 @@ pairs = [
     ["форма_выпуска", ["таблетки, капсулы, сбор","капсулы, сбор"], "твердое, сборы"],
     ["форма_выпуска", ["капсулы, порошок, пасты"], "твердое, сыпучее, полутвердое"],
     ["форма_выпуска", ["раствор, сбор"], "жидкое, сборы"],
+]
 
-    # Преобразуем столбцы с двумя уникальными значениями в бинарные
+for i in range(len(pairs)):
+    replace_exact(df, pairs[i][0],pairs[i][1], pairs[i][2])
+
+# %% [markdown]
+# Объединение группы столбцов:
+#
+# - J-X: Биологически_активные_вещества
+# - Y-AL: Системы_органов
+# - AQ-AU: Группа_населения
+#
+# Они заносятся в отдельный датафрей и в дальнейшем добавляются к основному датафрейму
+
+# %% [markdown]
+# Сделаем список столбцов которые мы хотим объединить
+# 1. биологически_вещества
+# 2. системы_органов
+# 3. группа_населения
+
+# %%
+df_copy=df.copy()
+biolog_columns = [
+    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
+    "пищевые_вещества_макро_и_микроэлементы",
+    "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
+    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
+    "пищевые_вещества_углеводы_и_продукты_их_переработки",
+    "минорные_компоненты_растений_фенольные_соединения",
+    "минорные_компоненты_растений_алкалоиды",
+    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
+    "минорные_компоненты_растений_сапонины",
+    "минорные_компоненты_растений_терпеноиды",
+    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
+    "минорные_компоненты_растений_гидроксикоричные_кислоты",
+    "минорные_компоненты_растений_ферменты",
+    "минорные_компоненты_растений_дубильные_вещества",
+    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты"
+]
+
+sys_org = []
+for col in df.columns:
+    if col.startswith("система_органов"):
+        sys_org.append(col)
+
+group_people = []
+for col in df.columns:
+   if col.startswith("группа_населения"):
+    group_people.append(col)
+
+
+# %% [markdown]
+# Функция для объединения столбцов
+
+# %%
+def combine_columns(df, cols, name_map=None):
+    def get_values(row):
+        out = []
+        for col in cols:
+            val = row[col]
+            if isinstance(val, (int, float)) and val == 1:
+                pretty = name_map[col] if name_map and col in name_map else col
+                out.append(pretty)
+            elif isinstance(val, str) and val.strip():
+                out.append(val.strip())
+        if not out:
+            return None
+
+        return ", ".join(dict.fromkeys(out))
+    return df.apply(get_values, axis=1)
+
+
+# %%
+df_bi=combine_columns(df_copy, biolog_columns, "биологически_активные_вещества")
+df_sy=combine_columns(df_copy, sys_org, "системы_органов")
+df_gr=combine_columns(df_copy, group_people, "группа_населения")
+
+df_save=pd.DataFrame({
+    "биологически_активные_вещества": df_bi,"системы_органы": df_sy,"группы_населения": df_gr})
+
+# %% [markdown]
+# Теперь, после создания объединенного столбца, для понимания корреляции, преобразуем значения столбцов, которые позже удалим, в бинарные
+
+# %%
+pairs_to_bin = [
     ["происхождение", ["иностранное"], "0"],
     ["происхождение", ["отечественное"], "1"],
     ["пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты", ["вит"], "1"],
@@ -549,11 +531,11 @@ pairs = [
     ["система_органов_кровь_и_система_кроветворения", ["кровь"], "1"],
     ["группа_населения_предназначен_для_детей", ["дети"], "1"],
     ["группа_населения_предназначен_для_взрослых", ["взрослые"], "1"],
-    ["группа_населения_пожилые", ["пожилые"], "1"],
+    ["группа_населения_пожилые", ["пожилые"], "1"]
 ]
 
-for i in range(len(pairs)):
-    replace_exact(df, pairs[i][0],pairs[i][1], pairs[i][2])
+for i in range(len(pairs_to_bin)):
+    replace_exact(df, pairs_to_bin[i][0],pairs_to_bin[i][1], pairs_to_bin[i][2])
 
 # %% [markdown]
 # Изменим тип некоторых столбцов
@@ -608,20 +590,6 @@ df['суммарное_количество_единиц_за_период'] = (
 )
 
 # %% [markdown]
-# Посмотрим суммарную ифнормацию о получившемся датафрейме
-
-# %%
-print_info(df)
-
-# %% [markdown]
-# Посмотрим как выглядит датафрейм на данный момент
-
-
-# %% [markdown]
-# Вопросы на рассмотрение:
-# Порог процента пустых значений, при котором мы отбросим столбец
-
-# %% [markdown]
 # Посмотрим корреляцию числовых признаков
 
 # %%
@@ -650,8 +618,6 @@ df_save = df_save.drop('количество_групп_компонентов',
 # Heatmap на основе корреляции
 
 # %%
-import matplotlib.pyplot as plt
-import seaborn as sns
 # Heatmap Пирсон
 plt.figure(figsize=(16, 14))
 sns.heatmap(correlation_pearson,
@@ -693,24 +659,26 @@ for i in range(len(correlation_matrix.columns)):
           'correlation': corr
       })
 
-# Удаляем бессмысленные
-significant_pairs = sorted(strong_pairs, key= lambda x: abs(x['correlation']), reverse=True)[:-1]
+# Удаление бессмысленных пар корреляции
+significant_pairs = sorted(strong_pairs, key=lambda x: abs(x['correlation']), reverse=True)
 
-significant_pairs = [
-    p for p in significant_pairs
-    if not ('группа_населения_возраст_детей' in p['feature1']
-            and 'группа_населения_предназначен_для_взрослых' in p['feature2'])
-    and not ('группа_населения_возраст_детей' in p['feature2']
-            and 'группа_населения_предназначен_для_взрослых' in p['feature1'])
+# Определяем бессмысленные пары как наборы
+meaningless_sets = [
+    {'группа_населения_возраст_детей', 'группа_населения_предназначен_для_взрослых'}
 ]
+
+# Фильтруем пары
+significant_pairs = [
+    pair for pair in significant_pairs
+    if {pair['feature1'], pair['feature2']} not in meaningless_sets
+]
+
 
 
 # %% [markdown]
 # Построим диаграмму рассеивания для пар с самой высокой корреляцией
 
 # %%
-from scipy.stats import pearsonr
-
 if significant_pairs:
     n_cols = 3
     n_rows = (len(significant_pairs) + n_cols - 1) // n_cols
@@ -798,7 +766,6 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
                        verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5",
                        facecolor='lightyellow', alpha=0.8))
 
-
                 # 6. Настройки осей
                 ax.set_xlabel(f'{feature1}\n(уник: {x_data.nunique()})', fontsize=11)
                 ax.set_ylabel(f'{feature2}\n(уник: {y_data.nunique()})', fontsize=11)
@@ -815,7 +782,6 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
 
                 direction = "ПОЛОЖИТЕЛЬНАЯ" if corr_value > 0 else "ОТРИЦАТЕЛЬНАЯ"
 
-
                 # 8. Сетка
                 ax.grid(True, alpha=0.3)
 
@@ -830,7 +796,7 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
     plt.show()
 
 # %% [markdown]
-# Объединение столбцов:биологически_активные_вещества, системы_органы,группы_населения с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
+# Объединение столбцов:"биологически_активные_вещества", "системы_органов", "группа_населения" с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
 
 # %%
 df = df.join(df_save)
@@ -840,12 +806,6 @@ for col in sys_org:
   df = df.drop(col, axis=1)
 for col in group_people:
   df = df.drop(col, axis=1)
-
-# %%
-df.head()
-
-# %%
-print_info(df)
 
 # %% [markdown]
 # Добавим парсинг столбца сырье на ингредиент_описание, ингредиент_рус, ингредиент_лат
@@ -912,11 +872,11 @@ def detect_language(text):
 
 
 # %% [markdown]
-# Функция для парсинга отдельного ингредиента на 3 компонента
+# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
 
 # %%
 def parse_single_ingredient(ingredient):
-    ingredient = str(ingredient).strip()
+    ingredient = str(ingredient).strip().lower()
 
     if ingredient in ['nan', 'None', '']:
         return (pd.NA, pd.NA, pd.NA)
@@ -976,9 +936,6 @@ def parse_single_ingredient(ingredient):
 
 
 # %%
-df['сырье'].isna().sum()
-
-# %%
 df["ингредиент_описание"] = pd.NA
 df["ингредиент_рус"] = pd.NA
 df["ингредиент_лат"] = pd.NA
@@ -992,7 +949,7 @@ for row in range(len(df)):
         df.at[row, "ингредиент_лат"] = pd.NA
         continue
 
-    string = str(raw_value).strip()
+    string = str(raw_value).strip().lower()
     ingredients = parse_ingredient_string(string)
 
     if not ingredients:
@@ -1019,14 +976,8 @@ for row in range(len(df)):
         df.at[row, "ингредиент_рус"] = ", ".join(russian_list) if russian_list else pd.NA
         df.at[row, "ингредиент_лат"] = ", ".join(latin_list) if latin_list else pd.NA
 
-# %%
-df.head()
-
-# %%
-df.columns
-
 # %% [markdown]
-# Удаление строк с отсутствующим сырьем
+# Удалим строки, у которых природное происхождение, но отсутствуют данные о сырье
 
 # %%
 indx_for_drop = []
@@ -1036,10 +987,639 @@ for i in range(len(df)):
 
 df = df.drop(indx_for_drop)
 
+# %%
+print_info(df)
+
+# %% [markdown]
+# Функция для извлечения ингредиентов из строки описания
+
+# %%
+def extract_ingredients(description):
+    if pd.isna(description) or description == "":
+        return []
+
+    # Удаляем содержимое в скобках
+    description_clean = re.sub(r'\([^)]*\)', '', str(description)).lower()
+
+    # Разделяем по запятым и очищаем от лишних пробелов
+    ingredients = [ing.strip().lower() for ing in description_clean.split(',')]
+
+    # Удаляем пустые строки и строки, содержащие только знаки препинания
+    ingredients = [ing for ing in ingredients if ing and ing.strip()]
+
+    return ingredients
+
+
+# %% [markdown]
+# Удаление дополнительных кавычек и точек
+
+# %%
+def clean_ingredient_name(ingredient):
+    # Удаляем кавычки в начале и конце
+    ingredient = re.sub(r'^["\']|["\']$', '', ingredient)
+    # Удаляем точки в конце
+    ingredient = re.sub(r'\.$', '', ingredient)
+    # Удаляем лишние пробелы
+    ingredient = ingredient.strip()
+    return ingredient
+
+
+# %% [markdown]
+# Извлекаем все ингредиенты из описания
+#
+
+# %%
+df['ингредиенты_список'] = df['ингредиент_описание'].apply(extract_ingredients)
+df['ингредиенты_список'] = df['ингредиенты_список'].apply(
+    lambda x: [clean_ingredient_name(ing) for ing in x if clean_ingredient_name(ing)]
+)
+
+
+# %%
+all_ingredients = set()
+for ingredient_list in df['ингредиенты_список']:
+  all_ingredients.update(ingredient_list)
+
+all_ingredients = sorted(list(all_ingredients))
+print(f"Всего уникальных значений: {len(all_ingredients)}")
+all_ingredients.remove("\\")
+print("Игредиенты:", all_ingredients[:100])
+
+# %% [markdown]
+# Создаем матрицу ингредиентов и корреляций
+
+# %%
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+mlb = MultiLabelBinarizer()
+ingredient_matrix = mlb.fit_transform(df['ингредиенты_список'])
+ingredient_df = pd.DataFrame(ingredient_matrix, columns=mlb.classes_)
+
+# Только ингредиенты, встречающиеся >= 10 раз
+frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= 10]
+filtered_df = ingredient_df[frequent_ingredients]
+
+# Корреляция и визуализация
+corr_matrix = pd.DataFrame(
+    cosine_similarity(filtered_df.T),
+    index=frequent_ingredients,
+    columns=frequent_ingredients
+)
+
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr_matrix, cmap='coolwarm', center=0)
+plt.title('Корреляции между ингредиентами (встречаются ≥10 раз)')
+plt.show()
+
+print(f"Проанализировано {len(frequent_ingredients)} ингредиентов")
+
+# %% [markdown]
+# Перейдем к построению графов. Начнём с графов двойной композиции.
+#
+# В первом случае у нас:
+# - вершины - биологически активные вещества
+# - ребра - наличие БАД содержащих эти биологически активные вещества
+# - вес - количество БАД содержащих эти биологически активные вещества
+#
+# Во втором случае у нас:
+# - вершины - растения
+# - ребра - наличие БАД содержащих эти растения
+# - вес - количество БАД содержащих эти растения
+
+# %% [markdown]
+# Напишем функцию, которая находит ребра и веса этих графов, функцию, которая разбирает строку в список элементов, а также функцию которая убирает значения меньше определенного в словаре
+
+# %%
+from itertools import combinations
+
+def parse_items(cell, sep=",", mapper=None):
+    if pd.isna(cell):
+        return []
+
+    raw_items = [x.strip() for x in str(cell).split(sep)]
+
+    items = []
+    for x in raw_items:
+        if not x:
+            continue
+        if mapper is not None:
+            x = mapper(x)
+        items.append(x)
+
+    return sorted(set(items))
+
+def count_pairs(df, col, sep=",", mapper=None):
+    pair_counts = {}
+
+    for cell in df[col]:
+        items = parse_items(cell, sep=sep, mapper=mapper)
+        if len(items) < 2:
+            continue
+
+        for a, b in combinations(items, 2):
+            key = (a, b)
+            pair_counts[key] = pair_counts.get(key, 0) + 1
+
+    return pair_counts
+
+def filter_dictionary_by_value(dict, threshold):
+    filtered_dict = {
+        key: value
+        for key, value in dict.items()
+        if value >= threshold
+    }
+    return filtered_dict
+
+
+# %% [markdown]
+# Поскольку нам важно, чтобы на графе были корректные и полнообъемные названия, то создадим словарь замен
+
+# %%
+CLASS_MAP = {
+    "вит": "Витамины, витаминоподобные вещества и коферменты",
+    "элементы": "Макро- и микроэлементы",
+    "пнжк": "Жиры, жироподобные вещества и их производные",
+    "стеран": "Жиры, жироподобные вещества и их производные",
+    "аминокислоты": "Белки, пептиды, аминокислоты, нуклеиновые кислоты",
+    "фенольн": "Фенольные соединения",
+    "алкалоиды": "Алкалоиды",
+    "пробиотики": "Пробиотические микроорганизмы",
+    "полисахариды": "Углеводы и продукты их переработки",
+    "сапонины": "Сапонины",
+    "терпен": "Терпеноиды",
+    "ест": "Естественные метаболиты и стимуляторы метаболизма",
+    "гидроксикор": "Гидроксикоричные кислоты",
+    "ферменты": "Ферменты",
+    "дуб": "Дубильные вещества",
+    "цеолиты": "Цеолиты и гуминовые кислоты",
+}
+
+# %% [markdown]
+# Теперь установим и импортируем нужные библиотеки для построения графов
+
+# %%
+# !pip install pyvis
+# !pip install --upgrade pyvis
+from pyvis.network import Network
+from jinja2 import Environment, FileSystemLoader
+import pyvis
+import os
+import json
+import networkx as nx
+import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
+import matplotlib as mpl
+import math
+import colorsys
+
+
+# %% [markdown]
+# Напишем функцию, создающую html страницу с интерактивным графом
+
+# %%
+def create_interactive_graph(pairs, output_path="interactive_graph.html"):
+    if not pairs:
+        print("Словарь пар пуст")
+        return
+
+    min_w = min(pairs.values())
+    max_w = max(pairs.values())
+
+    nodes_set = set()
+    for (u, v) in pairs.keys():
+        nodes_set.add(u)
+        nodes_set.add(v)
+
+    num_nodes = len(nodes_set)
+    num_edges = len(pairs)
+
+    nodes_sorted = sorted(nodes_set)
+    node_colors = {}
+
+    if num_nodes > 0:
+        for idx, node in enumerate(nodes_sorted):
+            hue = idx / float(num_nodes)
+            r, g, b = colorsys.hls_to_rgb(hue, 0.55, 0.8)
+            color_hex = "#{:02x}{:02x}{:02x}".format(
+                int(r * 255),
+                int(g * 255),
+                int(b * 255),
+            )
+            node_colors[node] = color_hex
+
+    net = Network(
+        height="1000px",
+        width="100%",
+        bgcolor="#222222",
+        font_color="white",
+        cdn_resources="in_line",
+    )
+
+    max_w_for_width = max_w if max_w > 0 else 1.0
+
+    for (u, v), w in pairs.items():
+
+        norm = max(w, 0) / max_w_for_width
+        width = 2.0 + 3.0 * math.sqrt(norm)
+
+        if u not in node_colors:
+            node_colors[u] = "#8ab4f8"
+        if v not in node_colors:
+            node_colors[v] = "#8ab4f8"
+
+        net.add_node(u, label=u, color=node_colors[u])
+        net.add_node(v, label=v, color=node_colors[v])
+
+        net.add_edge(
+            u,
+            v,
+            title=f"совместно в {w} БАДах",
+            width=width,
+            value=w,
+            color={"inherit": "both"},
+        )
+
+    options = {
+        "interaction": {
+            "hover": True,
+            "hoverConnectedEdges": True,
+            "selectConnectedEdges": True,
+        },
+        "nodes": {
+            "shape": "dot",
+            "scaling": {
+                "min": 10,
+                "max": 30,
+            },
+            "font": {
+                "size": 16,
+            },
+        },
+        "edges": {
+            "smooth": {
+                "enabled": True,
+                "type": "dynamic",
+                "roundness": 0.4,
+            },
+            "color": {
+                "inherit": "both",
+            },
+        },
+        "physics": {
+            "enabled": True,
+            "barnesHut": {
+                "gravitationalConstant": -30000,
+                "centralGravity": 0.01,
+                "springLength": 350,
+                "springConstant": 0.01,
+                "damping": 0.09,
+                "avoidOverlap": 0.7,
+            },
+            "stabilization": {
+                "iterations": 300,
+            },
+        },
+    }
+
+    net.set_options(json.dumps(options))
+
+    templates_path = os.path.join(os.path.dirname(pyvis.__file__), "templates")
+    env = Environment(loader=FileSystemLoader(templates_path))
+    net.template = env.get_template("template.html")
+
+    net.write_html(output_path)
+    add_weight_form_to_html(
+        output_path,
+        min_w=min_w,
+        max_w=max_w,
+        num_nodes=num_nodes,
+        num_edges=num_edges,
+    )
+
+    print("HTML сохранён в", output_path)
+
+def add_weight_form_to_html(html_path, min_w, max_w, num_nodes, num_edges):
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    placeholder = '<div id="mynetwork" class="card-body"></div>'
+
+    controls_html = f"""
+<div id="top-panel"
+     style="
+        position:fixed;
+        top:0; left:0; right:0;
+        z-index:9999;
+        background:rgba(20,20,20,0.95);
+        border-bottom:1px solid #444;
+        padding:8px 20px;
+        display:flex;
+        align-items:center;
+        gap:16px;
+        font-family:Arial, sans-serif;
+        font-size:14px;
+        color:#eee;
+     ">
+  <div style="font-weight:600; white-space:nowrap;">
+    Граф сочетаемости БАД-классов
+  </div>
+  <div style="opacity:0.8; white-space:nowrap;">
+    Вершин: {num_nodes} · Рёбер: {num_edges} · Макс. вес ребра: {max_w}
+  </div>
+  <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+    <label style="white-space:nowrap;">
+      Порог веса:
+      <input type="number"
+             id="minWeightInput"
+             value="{min_w}"
+             min="{min_w}"
+             max="{max_w}"
+             step="1"
+             style="
+                width:70px;
+                margin-left:4px;
+                padding:2px 4px;
+                background:#111;
+                border:1px solid #555;
+                color:#eee;
+                border-radius:4px;
+             ">
+    </label>
+    <button id="applyWeightBtn"
+            style="
+                padding:3px 12px;
+                border-radius:4px;
+                border:1px solid #666;
+                background:#2d6cdf;
+                color:#fff;
+                cursor:pointer;
+            ">
+      Применить
+    </button>
+    <span id="minWeightInfo"
+          style="margin-left:4px; font-size:12px; opacity:0.85;">
+      Порог: ≥ {min_w}
+    </span>
+  </div>
+</div>
+<!-- отступ, чтобы граф не залез под фиксированную панель -->
+<div style="height:48px;"></div>
+""".strip()
+
+    if placeholder in html:
+        html = html.replace(placeholder, controls_html + "\n\n" + placeholder, 1)
+    else:
+        print("Не найден div с id='mynetwork' class='card-body' — панель не вставлена")
+
+    js_block = f"""
+<script type="text/javascript">
+window.addEventListener("load", function () {{
+    if (typeof edges === "undefined") {{
+        console.warn("edges DataSet not found");
+        return;
+    }}
+
+    var allEdges = edges.get();
+    var input = document.getElementById("minWeightInput");
+    var btn   = document.getElementById("applyWeightBtn");
+    var info  = document.getElementById("minWeightInfo");
+
+    if (!input || !btn) {{
+        console.warn("weight controls not found");
+        return;
+    }}
+
+    function applyThreshold() {{
+        var v = parseInt(input.value);
+        if (isNaN(v)) {{
+            v = {min_w};
+            input.value = v;
+        }}
+        if (info) {{
+            info.textContent = "Порог: ≥ " + v;
+        }}
+
+        var updates = [];
+        for (var i = 0; i < allEdges.length; i++) {{
+            var e = allEdges[i];
+            var hide = e.value < v;
+            updates.push({{id: e.id, hidden: hide}});
+        }}
+        edges.update(updates);
+    }}
+
+    btn.addEventListener("click", applyThreshold);
+    input.addEventListener("keyup", function(e) {{
+        if (e.key === "Enter") {{
+            applyThreshold();
+        }}
+    }});
+
+    applyThreshold();
+}});
+</script>
+"""
+
+    html = html.replace("</body>", js_block + "\n</body>", 1)
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
+
+# %%
+def export_graph_png(
+    pairs,
+    output_path="bad_graph_colored.png",
+    min_weight=1,
+    label_min_weight=1,
+    cmap_name="viridis",
+    curve_scale=0.25,
+    label_t_ranges=((0.2, 0.4), (0.6, 0.8)),  # зоны для лейблов
+):
+    num_segments = 20
+
+    G = nx.Graph()
+    for (u, v), w in pairs.items():
+        if w < min_weight:
+            continue
+        G.add_edge(u, v, weight=w)
+
+    if G.number_of_edges() == 0:
+        print("После порога нет рёбер, PNG не из чего рисовать")
+        return
+
+    pos_nodes = {n: np.array(p) for n, p in nx.circular_layout(G).items()}
+
+    fig, ax = plt.subplots(figsize=(16, 12))
+
+    nodes = list(G.nodes())
+    n_nodes = len(nodes)
+    node_index = {n: i for i, n in enumerate(nodes)}
+
+    base_cmap = mpl.colormaps.get_cmap(cmap_name)
+    colors_for_nodes = base_cmap(np.linspace(0, 1, max(n_nodes, 1)))
+
+    node_color_dict = {
+        node: colors_for_nodes[i % colors_for_nodes.shape[0]]
+        for i, node in enumerate(nodes)
+    }
+    node_colors = [node_color_dict[n] for n in nodes]
+
+    weights = [w for (_, _, w) in G.edges(data="weight")]
+    max_w = max(weights) if weights else 1.0
+
+    segments = []
+    segment_colors = []
+    segment_widths = []
+    label_infos = []
+
+    center = np.array([0.0, 0.0])
+
+    for (u, v, w) in G.edges(data="weight"):
+        p0 = np.array(pos_nodes[u])
+        p1 = np.array(pos_nodes[v])
+
+        dir_vec = p1 - p0
+        dist = np.linalg.norm(dir_vec)
+        if dist == 0:
+            continue
+
+        mid = 0.5 * (p0 + p1)
+
+        perp = np.array([-dir_vec[1], dir_vec[0]]) / dist
+        c1 = mid + perp * curve_scale * dist
+        c2 = mid - perp * curve_scale * dist
+
+        control = c1 if np.linalg.norm(c1 - center) < np.linalg.norm(c2 - center) else c2
+
+        t_vals = np.linspace(0.0, 1.0, num_segments + 1)
+        a = ((1 - t_vals) ** 2)[:, None]
+        b = (2 * (1 - t_vals) * t_vals)[:, None]
+        c = (t_vals ** 2)[:, None]
+        points = a * p0 + b * control + c * p1
+
+        cu = np.array(node_color_dict[u])
+        cv = np.array(node_color_dict[v])
+
+        edge_width = 1.0 + 4.0 * (w / max_w)
+
+        for i in range(num_segments):
+            p_start = points[i]
+            p_end = points[i + 1]
+            segments.append([p_start, p_end])
+
+            t_mid = (t_vals[i] + t_vals[i + 1]) / 2.0
+            c_mid = cu * (1 - t_mid) + cv * t_mid
+            segment_colors.append(c_mid)
+            segment_widths.append(edge_width)
+
+        iu, iv = node_index[u], node_index[v]
+        r_idx = (iu + iv) % len(label_t_ranges)
+        t_lo, t_hi = label_t_ranges[r_idx]
+        t_label = 0.5 * (t_lo + t_hi)
+
+        aL = (1 - t_label) ** 2
+        bL = 2 * (1 - t_label) * t_label
+        cL = t_label ** 2
+        label_point = aL * p0 + bL * control + cL * p1
+        mx, my = label_point
+
+        label_color = cu * (1 - t_label) + cv * t_label
+        label_infos.append((mx, my, w, label_color))
+
+    lc = LineCollection(
+        segments,
+        colors=segment_colors,
+        linewidths=segment_widths,
+        alpha=0.9,
+        capstyle="round",
+        joinstyle="round",
+    )
+    lc.set_zorder(1)
+    ax.add_collection(lc)
+
+    node_collection = nx.draw_networkx_nodes(
+        G,
+        pos_nodes,
+        node_size=900,
+        node_color=node_colors,
+        ax=ax,
+    )
+    node_collection.set_zorder(2)
+
+    label_dict = nx.draw_networkx_labels(
+        G,
+        pos_nodes,
+        font_size=10,
+        ax=ax,
+    )
+    for text in label_dict.values():
+        text.set_clip_on(False)
+        text.set_zorder(3)
+
+    for (mx, my, w, label_color) in label_infos:
+        if w < label_min_weight:
+            continue
+
+        txt = ax.text(
+            mx,
+            my,
+            str(w),
+            fontsize=7,
+            ha="center",
+            va="center",
+            bbox=dict(
+                boxstyle="round,pad=0.18",
+                fc=label_color,
+                ec="none",
+                alpha=0.9,
+            ),
+            color="black",
+        )
+        txt.set_clip_on(False)
+        txt.set_zorder(3)
+
+    ax.set_axis_off()
+    ax.set_aspect("equal")
+
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    print("PNG сохранён в", output_path)
+
+
+# %%
+pairs_of_components = count_pairs(df, "биологически_активные_вещества", mapper=lambda x: CLASS_MAP.get(x, x))
+print(pairs_of_components)
+pairs_of_raw = count_pairs(df, "ингредиент_описание")
+print(pairs_of_raw)
+
+# %% [markdown]
+# Среди пар ингредиентов очень много ребер с весом 1. Они крайне неинформативны и более того мешающие. Поэтому уберем все ребра, которые меньше заданного значения веса
+
+# %%
+pairs_of_raw = filter_dictionary_by_value(pairs_of_raw, 3)
+
+# %%
+create_interactive_graph(pairs_of_components, output_path="interactive_graph_of_components.html")
+create_interactive_graph(pairs_of_raw, output_path="interactive_graph_of_raw.html")
+
+# %%
+export_graph_png(pairs_of_components, output_path="static_graph_of_components.png", min_weight=1, label_min_weight=1, cmap_name="tab20",
+    curve_scale=0.25,
+    label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
+)
+export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight=8, label_min_weight=1, cmap_name="tab20",
+    curve_scale=0.25,
+    label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
+)
+
 # %% [markdown]
 # # Сохранение изменений
 
-# %% tags=["skip"]
+# %%
 import os, sys
 import pathlib
 from pathlib import Path
@@ -1064,13 +1644,13 @@ if not IN_COLAB:
     cfg_path = ".jupytext.toml"
 else:
     print("Running in Colab, executing Jupytext sync logic...")
-    
+
     from google.colab import drive
     drive.mount('/content/drive')
-    
+
     NOTEBOOK = "/content/drive/MyDrive/Colab Notebooks/3311_bajmuhamedov_arshin_pasechny_practice_bad.ipynb"
     cfg_path = "/content/.jupytext.toml"
-    
+
 _system(f'pip -q install jupytext nbstripout')
 _system(f'nbstripout "{NOTEBOOK}"')
 
@@ -1081,7 +1661,7 @@ notebook_metadata_filter = "kernelspec,jupytext"
 with open(cfg_path, "w", encoding="utf-8") as f:
     f.write(cfg)
 
-if IN_COLAB:    
+if IN_COLAB:
     ipynb_path = Path(NOTEBOOK)
     py_path = ipynb_path.with_suffix(".py")
 
@@ -1090,17 +1670,17 @@ if IN_COLAB:
 
     print("IPYNB:", ipynb_path)
     print("PY:", py_path)
-    
+
     _system(f'nbstripout "{NOTEBOOK}"')
-    
+
     if py_path.exists():
         py_path.unlink()
-    
-    _system(f'jupytext --to py:percent "{NOTEBOOK}"') 
+
+    _system(f'jupytext --to py:percent "{NOTEBOOK}"')
 
     import datetime
     stat = py_path.stat()
     print("\nОбновлён .py:", py_path)
-    
+
 else:
     pass
