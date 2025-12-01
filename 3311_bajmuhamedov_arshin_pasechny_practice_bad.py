@@ -660,7 +660,7 @@ for i in range(len(correlation_matrix.columns)):
       })
 
 # Удаление бессмысленных пар корреляции
-significant_pairs = sorted(strong_pairs, key=lambda x: abs(x['correlation']), reverse=True)[:-1]
+significant_pairs = sorted(strong_pairs, key=lambda x: abs(x['correlation']), reverse=True)
 
 # Определяем бессмысленные пары как наборы
 meaningless_sets = [
