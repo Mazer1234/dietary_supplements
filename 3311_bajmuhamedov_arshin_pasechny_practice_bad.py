@@ -25,36 +25,106 @@
 # - Петруша Полина Георгиевна
 
 # %% [markdown]
-# Скачаем датасет с Яндекс.Диска
+# Подключаем библиотеки
 
 # %%
 import requests
 from urllib.parse import urlencode
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import re
+from collections import Counter, defaultdict
+from tabulate import tabulate
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import pearsonr
 
-base_url = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?'
+
+# %% [markdown]
+# Функция для скачивания файлов с Яндекс.Диска
+
+# %%
+def load_from_yandex(public_key, file_type='auto'):
+    base_url = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?'
+    final_url = base_url + urlencode(dict(public_key=public_key))
+
+    # Получаем ссылку для скачивания
+    response = requests.get(final_url)
+    download_url = response.json()['href']
+
+    # Скачиваем файл
+    file_response = requests.get(download_url)
+
+    # Определяем тип файла
+    if file_type == 'auto':
+        if 'text' in file_response.headers.get('content-type', '') or download_url.endswith(('.txt', '.csv')):
+            file_type = 'text'
+        elif download_url.endswith(('.xlsx', '.xls')):
+            file_type = 'excel'
+        else:
+            file_type = 'binary'
+
+    # Обрабатываем в зависимости от типа
+    if file_type == 'text':
+        content = file_response.content.decode('utf-8')
+        corrections = {}
+        for line in content.split('\n'):
+            if ':' in line:
+                name, value = line.split(':', 1)
+                corrections[name.strip()] = int(value.strip())
+        return corrections
+    else:
+        # Для excel и binary возвращаем бинарные данные
+        return file_response.content
+
+
+# %% [markdown]
+# Напишем функцию, выводящую суммарную информацию о датафрейме
+
+# %%
+def print_info(df):
+    analysis = []
+
+    for col in df.columns:
+        dtype = df[col].dtype
+        unique_count = df[col].nunique()
+        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
+
+        unique_values = df[col].dropna().unique()
+        if len(unique_values) <= 5:
+            unique_display = list(unique_values)
+        else:
+            unique_display = ">5 unique values"
+
+        analysis.append({
+            'столбец': col,
+            'тип': str(dtype),
+            'уникальных': unique_count,
+            'пропущено %': f"{missing_pct}%",
+            'уникальные значения': unique_display
+        })
+
+    result_df = pd.DataFrame(analysis)
+    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
+
+# %% [markdown]
+# Скачаем датасет с Яндекс.Диска
+
+# %%
 public_key = "https://disk.yandex.ru/d/V1sJpR-SUJ_b8A"
-
-final_url = base_url + urlencode(dict(public_key=public_key))
-response = requests.get(final_url)
-download_url = response.json()['href']
-
-download_response = requests.get(download_url)
+file_content = load_from_yandex(public_key)
 with open('dataset.xlsx', 'wb') as f:
-    f.write(download_response.content)
+    f.write(file_content)
 
 # %% [markdown]
 # Прочитаем в датафрейм наш файл
 
 # %%
-from pathlib import Path
-import pandas as pd
-import numpy as np
-
 xlsx_path = "dataset.xlsx"
 if not xlsx_path:
     raise FileNotFoundError("xlsx файл не найден")
 print("Найден XLSX:", xlsx_path)
-
 df = pd.read_excel(xlsx_path, sheet_name=0, header=[0,1])
 print("Данные загружены в df")
 
@@ -76,13 +146,11 @@ pd.set_option('display.max_rows', None)
 # %%
 df.head()
 
+
 # %% [markdown]
 # Соединим заголовки первого и второго уровня вместе. Также уберем пробелы между словами в столбцах, заменив их на "_" и приведем названия столбцов к нижнему регистру.
 
 # %%
-import re
-from collections import Counter, defaultdict
-
 def clean(s):
     if s is None: return ""
     s = str(s).replace("\n"," ").replace("\xa0"," ").strip()
@@ -103,7 +171,6 @@ cnt = Counter(flat); seen = defaultdict(int); uniq = []
 for n in flat:
     seen[n] += 1
     uniq.append(n if cnt[n] == 1 else f"{n}__{seen[n]}")
-
 df.columns = uniq
 
 # %% [markdown]
@@ -120,11 +187,10 @@ to_rename = {
     "система_органов_сердечно-сосудистая_система":"система_органов_сердечно_сосудистая_система",
     "система_органов_происхождение_природное_синтетическое":"происхождение_природное_синтетическое"
 }
-
 df = df.rename(columns=to_rename)
 
 # %% [markdown]
-# Создадим новый столбец "рекомендации_по_применению". Информацию для них берем из столбца Этикетка, затем отчищаем оттуда взятую инфу.
+# Создадим новый столбец "рекомендации_по_применению". Информацию для них берем из столбца "этикетка", затем очищаем оттуда взятую информацию.
 
 # %%
 df['рекомендации_по_применению'] = pd.NA
@@ -174,12 +240,16 @@ for row in range(len(df)):
     df.at[row, 'этикетка'] = str_for_et
 
 # %% [markdown]
-# Создадим новый столбцы:
-# - Количество единиц на прием
-# - Количество приемов в день
-# - Суммарное количество единиц за период (Количество единиц на приеме * Количество приемов в день * Продолжительность приема)
+# Создадим новые столбцы:
+# - "количество единиц на прием"
+# - "количество приемов в день"
+# - "суммарное количество единиц за период" (количество единиц на приеме * количество приемов в день * продолжительность приема)
 
 # %%
+# Настройки для полного отображения текста
+pd.set_option('display.max_colwidth', None)  # Без ограничения ширины столбцов
+pd.set_option('display.max_rows', None)      # Показывать все строки
+
 df["количество_единиц_на_прием"] = pd.NA
 df["количество_приемов_в_день"] = pd.NA
 df["суммарное_количество_единиц_за_период"] = pd.NA
@@ -191,7 +261,6 @@ re_times_range = re.compile(r'(\d+)\s*-\s*(\d+)\s*раз', flags=re.IGNORECASE)
 re_times_single = re.compile(r'(\d+)\s*раз', flags=re.IGNORECASE)
 re_grams_inline = re.compile(r'\b(\d+)\s*(?:г\b|грамм\w*)', flags=re.IGNORECASE)
 re_ml = re.compile(r'\b(\d+)\s*мл\b(?!\s*питьевой воды)', flags=re.IGNORECASE)
-
 
 for i in range(len(df)):
     string_raw = str(df.at[i, 'рекомендации_по_применению'])
@@ -233,7 +302,6 @@ for i in range(len(df)):
     df.at[i, 'количество_единиц_на_прием'] = units
 
     # количество_приемов_в_день
-
     times = 1
     m = re_times_range.search(string)
     if m:
@@ -244,104 +312,18 @@ for i in range(len(df)):
             times = int(m.group(1))
     df.at[i, 'количество_приемов_в_день'] = times
 
-# Заменим некоторые неправильно обработанные строки вручную
-df.loc[39, 'количество_единиц_на_прием'] = 1
-df.loc[59, 'количество_единиц_на_прием'] = 2
-df.loc[91, 'количество_единиц_на_прием'] = 1
-df.loc[102, 'количество_единиц_на_прием'] = 6
-df.loc[178, 'количество_единиц_на_прием'] = 2
-df.loc[215, 'количество_единиц_на_прием'] = 2
-df.loc[222, 'количество_единиц_на_прием'] = 5
-df.loc[723, 'количество_единиц_на_прием'] = 4
-df.loc[928, 'количество_единиц_на_прием'] = 1
-df.loc[1207, 'количество_единиц_на_прием'] = 3
-df.loc[1219, 'количество_единиц_на_прием'] = 1
-df.loc[1262, 'количество_единиц_на_прием'] = 1
-df.loc[1263, 'количество_единиц_на_прием'] = 2
-df.loc[1264, 'количество_единиц_на_прием'] = 3
-df.loc[1265, 'количество_единиц_на_прием'] = 3
-df.loc[1289, 'количество_единиц_на_прием'] = 1
-df.loc[1492, 'количество_единиц_на_прием'] = 1
-df.loc[1693, 'количество_единиц_на_прием'] = 1
-df.loc[1785, 'количество_единиц_на_прием'] = 1
-df.loc[1786, 'количество_единиц_на_прием'] = 2
-df.loc[1855, 'количество_единиц_на_прием'] = 6
-df.loc[1884, 'количество_единиц_на_прием'] = 10
-df.loc[1991, 'количество_единиц_на_прием'] = 2
-df.loc[2117, 'количество_единиц_на_прием'] = 1
-df.loc[2325, 'количество_единиц_на_прием'] = 3
-df.loc[2391, 'количество_единиц_на_прием'] = 1
-df.loc[2487, 'количество_единиц_на_прием'] = 6
-df.loc[2517, 'количество_единиц_на_прием'] = 2
-df.loc[2518, 'количество_единиц_на_прием'] = 4
-df.loc[2523, 'количество_единиц_на_прием'] = 4
-df.loc[2524, 'количество_единиц_на_прием'] = 2
-df.loc[2531, 'количество_единиц_на_прием'] = 5
-df.loc[2545, 'количество_единиц_на_прием'] = 8
-df.loc[2598, 'количество_единиц_на_прием'] = 1
-df.loc[2675, 'количество_единиц_на_прием'] = 3
-df.loc[2724, 'количество_единиц_на_прием'] = 1
-df.loc[2729, 'количество_единиц_на_прием'] = 2
-df.loc[2843, 'количество_единиц_на_прием'] = 1
-df.loc[2857, 'количество_единиц_на_прием'] = 3
-df.loc[2859, 'количество_единиц_на_прием'] = 3
-df.loc[2889, 'количество_единиц_на_прием'] = 1
-df.loc[2894, 'количество_единиц_на_прием'] = 1
-df.loc[2895, 'количество_единиц_на_прием'] = 1
-df.loc[2900, 'количество_единиц_на_прием'] = 2
-df.loc[2902, 'количество_единиц_на_прием'] = 3
-df.loc[2937, 'количество_единиц_на_прием'] = 2
-df.loc[2951, 'количество_единиц_на_прием'] = 1
-df.loc[3028, 'количество_единиц_на_прием'] = 3
-df.loc[3314, 'количество_единиц_на_прием'] = 5
-df.loc[3470, 'количество_единиц_на_прием'] = 2
-df.loc[3649, 'количество_единиц_на_прием'] = 1
-df.loc[3660, 'количество_единиц_на_прием'] = 1
-df.loc[3960, 'количество_единиц_на_прием'] = 1
-df.loc[3963, 'количество_единиц_на_прием'] = 8
-df.loc[3965, 'количество_единиц_на_прием'] = 3
-df.loc[4026, 'количество_единиц_на_прием'] = 1
-df.loc[4103, 'количество_единиц_на_прием'] = 1
-df.loc[4141, 'количество_единиц_на_прием'] = 2
+yandex_url1 = "https://disk.yandex.ru/d/aai4Di0mdUuITw"
+yandex_url2 = "https://disk.yandex.ru/d/Su4aCUDzBKlWNA"
+corrections1 = load_from_yandex(yandex_url1)
+corrections2 = load_from_yandex(yandex_url2)
 
-df.loc[22, 'количество_приемов_в_день'] = 4
-df.loc[39, 'количество_приемов_в_день'] = 6
-df.loc[91, 'количество_приемов_в_день'] = 2
-df.loc[102, 'количество_приемов_в_день'] = 6
-df.loc[319, 'количество_приемов_в_день'] = 3
+for name, value in corrections1.items():
+    mask = df['наименование'] == name
+    df.loc[mask, 'количество_единиц_на_прием'] = value
 
-
-# %% [markdown]
-# Напишем функцию, выводящую суммарную информацию о датафрейме
-
-# %%
-def print_info(df):
-    analysis = []
-
-    for col in df.columns:
-        dtype = df[col].dtype
-        unique_count = df[col].nunique()
-        missing_pct = (df[col].isna().sum() / len(df) * 100).round(2)
-
-        unique_values = df[col].dropna().unique()
-        if len(unique_values) <= 5:
-            unique_display = list(unique_values)
-        else:
-            unique_display = ">5 unique values"
-
-        analysis.append({
-            'столбец': col,
-            'тип': str(dtype),
-            'уникальных': unique_count,
-            'пропущено %': f"{missing_pct}%",
-            'уникальные значения': unique_display
-        })
-
-    result_df = pd.DataFrame(analysis)
-
-    from tabulate import tabulate
-    print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
-
+for name, value in corrections2.items():
+    mask = df['наименование'] == name
+    df.loc[mask, 'количество_приемов_в_день'] = value
 
 # %% [markdown]
 # Напишем функцию, которая заменяет значение из списка в строке столбца на заданное значение. Таким образом, заменим:
@@ -636,8 +618,6 @@ df_save = df_save.drop('количество_групп_компонентов',
 # Heatmap на основе корреляции
 
 # %%
-import matplotlib.pyplot as plt
-import seaborn as sns
 # Heatmap Пирсон
 plt.figure(figsize=(16, 14))
 sns.heatmap(correlation_pearson,
@@ -679,24 +659,26 @@ for i in range(len(correlation_matrix.columns)):
           'correlation': corr
       })
 
-# Удаляем бессмысленные
-significant_pairs = sorted(strong_pairs, key= lambda x: abs(x['correlation']), reverse=True)[:-1]
+# Удаление бессмысленных пар корреляции
+significant_pairs = sorted(strong_pairs, key=lambda x: abs(x['correlation']), reverse=True)
 
-significant_pairs = [
-    p for p in significant_pairs
-    if not ('группа_населения_возраст_детей' in p['feature1']
-            and 'группа_населения_предназначен_для_взрослых' in p['feature2'])
-    and not ('группа_населения_возраст_детей' in p['feature2']
-            and 'группа_населения_предназначен_для_взрослых' in p['feature1'])
+# Определяем бессмысленные пары как наборы
+meaningless_sets = [
+    {'группа_населения_возраст_детей', 'группа_населения_предназначен_для_взрослых'}
 ]
+
+# Фильтруем пары
+significant_pairs = [
+    pair for pair in significant_pairs
+    if {pair['feature1'], pair['feature2']} not in meaningless_sets
+]
+
 
 
 # %% [markdown]
 # Построим диаграмму рассеивания для пар с самой высокой корреляцией
 
 # %%
-from scipy.stats import pearsonr
-
 if significant_pairs:
     n_cols = 3
     n_rows = (len(significant_pairs) + n_cols - 1) // n_cols
@@ -814,7 +796,7 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
     plt.show()
 
 # %% [markdown]
-# Объединение столбцов:биологически_активные_вещества, системы_органы,группы_населения с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
+# Объединение столбцов:"биологически_активные_вещества", "системы_органов", "группа_населения" с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
 
 # %%
 df = df.join(df_save)
@@ -1005,6 +987,8 @@ for i in range(len(df)):
 
 df = df.drop(indx_for_drop)
 
+# %%
+print_info(df)
 
 # %% [markdown]
 # Функция для извлечения ингредиентов из строки описания
