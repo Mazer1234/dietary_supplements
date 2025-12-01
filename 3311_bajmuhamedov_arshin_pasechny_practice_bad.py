@@ -1616,7 +1616,7 @@ print(pairs_of_raw)
 # Среди пар ингредиентов очень много ребер с весом 1. Они крайне неинформативны и более того мешающие. Поэтому уберем все ребра, которые меньше заданного значения веса
 
 # %%
-# pairs_of_raw = filter_dictionary_by_value(pairs_of_raw, 8)
+pairs_of_raw = filter_dictionary_by_value(pairs_of_raw, 3)
 
 # %%
 create_interactive_graph(pairs_of_components, output_path="interactive_graph_of_components.html")
