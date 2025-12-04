@@ -1060,6 +1060,7 @@ ingredient_df = pd.DataFrame(ingredient_matrix, columns=mlb.classes_)
 frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= 10]
 filtered_df = ingredient_df[frequent_ingredients]
 
+
 # Корреляция и визуализация
 corr_matrix = pd.DataFrame(
     cosine_similarity(filtered_df.T),
@@ -1067,11 +1068,21 @@ corr_matrix = pd.DataFrame(
     columns=frequent_ingredients
 )
 
-plt.figure(figsize=(10, 8))
-sns.heatmap(corr_matrix, cmap='coolwarm', center=0)
-plt.title('Корреляции между ингредиентами (встречаются ≥10 раз)')
-plt.show()
-
+mask = np.eye(len(corr_matrix), dtype=bool)
+plt.figure(figsize=(14, 12))
+sns.heatmap(
+    corr_matrix,
+    cmap='RdBu_r',  # Контрастная палитра
+    center=0,
+    mask=mask,  # Убираем диагональ
+    vmin=-0.5, vmax=0.5,  # Ограничиваем диапазон для большего контраста
+    square=True,
+    cbar_kws={
+        'label': 'Корреляция',
+        'shrink': 0.8,
+        'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
+    }
+)
 print(f"Проанализировано {len(frequent_ingredients)} ингредиентов")
 
 # %% [markdown]
@@ -1617,6 +1628,81 @@ export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight
 )
 
 # %% [markdown]
+# Функция для создания словаря из csv файла
+
+# %%
+import csv
+from io import StringIO
+
+def create_dict_from_csv(csv_content):
+    if isinstance(csv_content, bytes):
+        # Декодируем байты в строку, убирая BOM если есть
+        content = csv_content.decode('utf-8-sig')
+    else:
+        content = str(csv_content)
+
+    corrections = {}
+
+    # Используем csv.reader для корректного парсинга CSV
+    reader = csv.reader(StringIO(content), delimiter=',', quotechar='"')
+
+    for row in reader:
+        if len(row) >= 2:
+            key = row[0].strip()
+            value = row[1].strip()
+
+            # Добавляем только если значение не пустое
+            if value:
+                corrections[key] = value
+    return corrections
+
+
+# %% [markdown]
+# Создание словаря из значений, которые необходимо заменить
+
+# %%
+bads_change_ya = "https://disk.yandex.ru/d/viYfUrU32TVcWQ"
+bads_change = load_from_yandex(bads_change_ya, ',')
+
+# Создаем словарь
+corrections_dict = create_dict_from_csv(bads_change)
+
+# %%
+print(f"Создан словарь с {len(corrections_dict)} записями")
+print("\nПримеры записей (первые 10):")
+for i, (key, value) in enumerate(list(corrections_dict.items())[:5]):
+    print(f"{i+1}. Ключ: {key}")
+    print(f"   Значение: {value}")
+    print()
+
+# %%
+print(corrections_dict)
+
+
+# %%
+def replace_in_list_column(df, col, correction_dict):
+    def replace_in_cell(ingredient_list):
+        if not isinstance(ingredient_list, list):
+            return ingredient_list
+
+        new_list = []
+        for item in ingredient_list:
+            # Проверяем, есть ли замена для этого ингредиента
+            new_item = correction_dict.get(item, item)
+            new_list.append(new_item)
+        return new_list
+
+    df[col] = df[col].apply(replace_in_cell)
+    return df
+
+
+# %%
+replace_in_list_column(df, 'ингредиенты_список', corrections_dict)
+
+# %% [markdown]
+# Категоризирование столбцов
+
+# %% [markdown]
 # Удаление столбцов (Они нам не понадобятся в дальнейшей обработке):
 #
 # *   наименование
@@ -1642,96 +1728,6 @@ cols_to_drop = [
 for col in cols_to_drop:
   df = df.drop(col, axis=1)
 
-
-# %% [markdown]
-# Функция для создания словаря из csv файла
-
-# %%
-import csv
-from io import StringIO
-
-def create_dict_from_csv(csv_content):
-    """
-    Создает словарь из CSV контента.
-    Ключ - первый столбец, значение - второй столбец.
-    Если второго столбца нет или он пустой - не добавляем в словарь.
-    """
-    if isinstance(csv_content, bytes):
-        # Декодируем байты в строку, убирая BOM если есть
-        content = csv_content.decode('utf-8-sig')
-    else:
-        content = str(csv_content)
-
-    corrections = {}
-
-    # Используем csv.reader для корректного парсинга CSV
-    reader = csv.reader(StringIO(content), delimiter=',', quotechar='"')
-
-    for row in reader:
-        if len(row) >= 2:
-            key = row[0].strip()
-            value = row[1].strip()
-
-            # Добавляем только если значение не пустое
-            if value:
-                corrections[key] = value
-        elif len(row) == 1:
-            # Если есть только ключ без значения, пропускаем
-            continue
-
-    return corrections
-
-
-# %% [markdown]
-# Создание словаря из значений, которые необходимо заменить
-
-# %%
-href = "https://disk.yandex.ru/d/viYfUrU32TVcWQ"
-file_content = load_from_yandex(href, ',')
-
-# Создаем словарь
-corrections_dict = create_dict_from_csv(file_content)
-
-# %%
-print(f"Создан словарь с {len(corrections_dict)} записями")
-print("\nПримеры записей (первые 10):")
-for i, (key, value) in enumerate(list(corrections_dict.items())[:5]):
-    print(f"{i+1}. Ключ: {key}")
-    print(f"   Значение: {value}")
-    print()
-
-# %%
-print(corrections_dict)
-
-
-# %% [markdown]
-# Функция replace_exact меняет только точные совпадения, то есть если есть список слов, то одно слово она не поменяет. Эта функция меняет значение в столбце ингредиенты_список.
-
-# %%
-def replace_in_list_column(df, col, correction_dict):
-    """
-      Меняем конкретный список в столбце ингредиенты_список.
-    """
-    def replace_in_cell(ingredient_list):
-        if not isinstance(ingredient_list, list):
-            return ingredient_list
-
-        new_list = []
-        for item in ingredient_list:
-            # Проверяем, есть ли замена для этого ингредиента
-            new_item = correction_dict.get(item, item)
-            new_list.append(new_item)
-        return new_list
-
-    df[col] = df[col].apply(replace_in_cell)
-    return df
-
-
-# %%
-replace_in_list_column(df, 'ингредиенты_список', corrections_dict)
-
-# %% [markdown]
-# Категоризирование столбцов
 
 # %% [markdown]
 # Категоризируем столбец происхождение_природное_синтетическое
