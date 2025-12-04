@@ -108,6 +108,7 @@ def print_info(df):
     result_df = pd.DataFrame(analysis)
     print(tabulate(result_df, headers='keys', tablefmt='grid', showindex=False))
 
+
 # %% [markdown]
 # Скачаем датасет с Яндекс.Диска
 
@@ -324,6 +325,7 @@ for name, value in corrections1.items():
 for name, value in corrections2.items():
     mask = df['наименование'] == name
     df.loc[mask, 'количество_приемов_в_день'] = value
+
 
 # %% [markdown]
 # Напишем функцию, которая заменяет значение из списка в строке столбца на заданное значение. Таким образом, заменим:
@@ -990,6 +992,7 @@ df = df.drop(indx_for_drop)
 # %%
 print_info(df)
 
+
 # %% [markdown]
 # Функция для извлечения ингредиентов из строки описания
 
@@ -1034,6 +1037,87 @@ df['ингредиенты_список'] = df['ингредиенты_спис�
     lambda x: [clean_ingredient_name(ing) for ing in x if clean_ingredient_name(ing)]
 )
 
+# %%
+all_ingredients = set()
+for ingredient_list in df['ингредиенты_список']:
+  all_ingredients.update(ingredient_list)
+
+all_ingredients = sorted(list(all_ingredients))
+print(f"Всего уникальных значений: {len(all_ingredients)}")
+all_ingredients.remove("\\")
+print("Игредиенты:", all_ingredients[:100])
+
+# %% [markdown]
+# Функция для создания словаря из csv файла
+
+# %%
+import csv
+from io import StringIO
+
+def create_dict_from_csv(csv_content):
+    if isinstance(csv_content, bytes):
+        # Декодируем байты в строку, убирая BOM если есть
+        content = csv_content.decode('utf-8-sig')
+    else:
+        content = str(csv_content)
+
+    corrections = {}
+
+    # Используем csv.reader для корректного парсинга CSV
+    reader = csv.reader(StringIO(content), delimiter=',', quotechar='"')
+
+    for row in reader:
+        if len(row) >= 2:
+            key = row[0].strip()
+            value = row[1].strip()
+
+            # Добавляем только если значение не пустое
+            if value:
+                corrections[key] = value
+    return corrections
+
+
+# %% [markdown]
+# Создание словаря из значений, которые необходимо заменить
+
+# %%
+bads_change_ya = "https://disk.yandex.ru/d/viYfUrU32TVcWQ"
+bads_change = load_from_yandex(bads_change_ya, ',')
+
+# Создаем словарь
+corrections_dict = create_dict_from_csv(bads_change)
+
+# %%
+print(f"Создан словарь с {len(corrections_dict)} записями")
+print("\nПримеры записей (первые 10):")
+for i, (key, value) in enumerate(list(corrections_dict.items())[:5]):
+    print(f"{i+1}. Ключ: {key}")
+    print(f"   Значение: {value}")
+    print()
+
+# %%
+print(corrections_dict)
+
+
+# %%
+def replace_in_list_column(df, col, correction_dict):
+    def replace_in_cell(ingredient_list):
+        if not isinstance(ingredient_list, list):
+            return ingredient_list
+
+        new_list = []
+        for item in ingredient_list:
+            # Проверяем, есть ли замена для этого ингредиента
+            new_item = correction_dict.get(item, item)
+            new_list.append(new_item)
+        return new_list
+
+    df[col] = df[col].apply(replace_in_cell)
+    return df
+
+
+# %%
+replace_in_list_column(df, 'ингредиенты_список', corrections_dict)
 
 # %%
 all_ingredients = set()
@@ -1611,7 +1695,7 @@ print(pairs_of_raw)
 # Среди пар ингредиентов очень много ребер с весом 1. Они крайне неинформативны и более того мешающие. Поэтому уберем все ребра, которые меньше заданного значения веса
 
 # %%
-pairs_of_raw = filter_dictionary_by_value(pairs_of_raw, 3)
+pairs_of_raw = filter_dictionary_by_value(pairs_of_raw, 5)
 
 # %%
 create_interactive_graph(pairs_of_components, output_path="interactive_graph_of_components.html")
@@ -1626,78 +1710,6 @@ export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight
     curve_scale=0.25,
     label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
 )
-
-# %% [markdown]
-# Функция для создания словаря из csv файла
-
-# %%
-import csv
-from io import StringIO
-
-def create_dict_from_csv(csv_content):
-    if isinstance(csv_content, bytes):
-        # Декодируем байты в строку, убирая BOM если есть
-        content = csv_content.decode('utf-8-sig')
-    else:
-        content = str(csv_content)
-
-    corrections = {}
-
-    # Используем csv.reader для корректного парсинга CSV
-    reader = csv.reader(StringIO(content), delimiter=',', quotechar='"')
-
-    for row in reader:
-        if len(row) >= 2:
-            key = row[0].strip()
-            value = row[1].strip()
-
-            # Добавляем только если значение не пустое
-            if value:
-                corrections[key] = value
-    return corrections
-
-
-# %% [markdown]
-# Создание словаря из значений, которые необходимо заменить
-
-# %%
-bads_change_ya = "https://disk.yandex.ru/d/viYfUrU32TVcWQ"
-bads_change = load_from_yandex(bads_change_ya, ',')
-
-# Создаем словарь
-corrections_dict = create_dict_from_csv(bads_change)
-
-# %%
-print(f"Создан словарь с {len(corrections_dict)} записями")
-print("\nПримеры записей (первые 10):")
-for i, (key, value) in enumerate(list(corrections_dict.items())[:5]):
-    print(f"{i+1}. Ключ: {key}")
-    print(f"   Значение: {value}")
-    print()
-
-# %%
-print(corrections_dict)
-
-
-# %%
-def replace_in_list_column(df, col, correction_dict):
-    def replace_in_cell(ingredient_list):
-        if not isinstance(ingredient_list, list):
-            return ingredient_list
-
-        new_list = []
-        for item in ingredient_list:
-            # Проверяем, есть ли замена для этого ингредиента
-            new_item = correction_dict.get(item, item)
-            new_list.append(new_item)
-        return new_list
-
-    df[col] = df[col].apply(replace_in_cell)
-    return df
-
-
-# %%
-replace_in_list_column(df, 'ингредиенты_список', corrections_dict)
 
 # %% [markdown]
 # Категоризирование столбцов
@@ -1728,7 +1740,6 @@ cols_to_drop = [
 for col in cols_to_drop:
   df = df.drop(col, axis=1)
 
-
 # %% [markdown]
 # Категоризируем столбец происхождение_природное_синтетическое
 
@@ -1738,7 +1749,6 @@ for i in range(len(df)):
         df.iloc[i, df.columns.get_loc("происхождение_природное_синтетическое")] = 0
     else:
         df.iloc[i, df.columns.get_loc("происхождение_природное_синтетическое")] = 1
-
 
 # %% [markdown]
 # # Сохранение изменений
