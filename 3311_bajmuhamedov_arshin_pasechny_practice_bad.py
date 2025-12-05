@@ -1751,6 +1751,174 @@ for i in range(len(df)):
         df.iloc[i, df.columns.get_loc("происхождение_природное_синтетическое")] = 1
 
 # %% [markdown]
+# Категоризируем признаки
+
+# %%
+num_cols = ['срок_годности', 'год_регистрации', 'количество_групп_компонентов',
+            'продолжительность_приема', 'количество_единиц_на_прием',
+            'количество_приемов_в_день', 'суммарное_количество_единиц_за_период']
+
+one_hot_cols = ['форма_выпуска']
+text_cols = ['ингредиенты_список']
+multilabel_cols = ['системы_органы', 'группы_населения', 'биологически_активные_вещества']
+
+# %%
+df[num_cols] = df[num_cols].fillna(df[num_cols].median())
+
+# %% [markdown]
+# One-Hot Encoding
+
+# %%
+import pandas as pd
+
+df_onehot = pd.get_dummies(df[one_hot_cols], drop_first=True)
+
+df = pd.concat([df, df_onehot], axis=1)
+
+# %%
+binary_cols = ['происхождение_природное_синтетическое', 'происхождение', 'форма_выпуска_жидкое, сборы',
+       'форма_выпуска_полутвердое', 'форма_выпуска_сборы',
+       'форма_выпуска_сыпучее', 'форма_выпуска_твердое',
+       'форма_выпуска_твердое, жидкое', 'форма_выпуска_твердое, сборы',
+       'форма_выпуска_твердое, сыпучее',
+       'форма_выпуска_твердое, сыпучее, полутвердое']
+
+# %% [markdown]
+# Масштабируем числовые признаки
+
+# %%
+from sklearn.preprocessing import StandardScaler
+
+scaler = StandardScaler()
+df[num_cols] = scaler.fit_transform(df[num_cols])
+
+# %% [markdown]
+# Преобразуем столбцы системы_органы, группы_населения, биологически_активные_добавки в списки
+
+# %%
+df = df.fillna({'системы_органы':'', 'группы_населения':'', 'биологически_активные_вещества':'', 'ингредиенты_список':''})
+
+def safe_split(s):
+  if not isinstance(s, str) or s.strip()=="":
+    return []
+  return [tok.strip() for tok in s.split(',') if tok.strip()!='']
+
+df['системы_органы_список'] = df['системы_органы'].apply(safe_split)
+df['группы_населения_список'] = df['группы_населения'].apply(safe_split)
+df['биологически_активные_вещества_список'] = df['биологически_активные_вещества'].apply(safe_split)
+
+# %% [markdown]
+# Создаем словарь токенов для каждого столбца с большим количество уникальных элементов
+
+# %%
+from itertools import chain
+
+def build_vocab(column):
+  tokens = set(chain.from_iterable(df[column]))
+  tokens.discard('')
+  tokens = sorted([t for t in tokens if t is not None])
+  return {t:i for i,t in enumerate(tokens)}
+
+vocab_organs = build_vocab('системы_органы_список')
+vocab_groups = build_vocab('группы_населения_список')
+vocab_bio = build_vocab('биологически_активные_вещества_список')
+vocab_ingredients = build_vocab('ингредиенты_список')
+
+# %% [markdown]
+# Превращаем каждый список категорий в список индексов
+
+# %%
+df['organs_ids'] = df['системы_органы_список'].apply(lambda lst: [vocab_organs[x] for x in lst])
+df['groups_ids'] = df['группы_населения_список'].apply(lambda lst: [vocab_groups[x] for x in lst])
+df['bio_ids'] = df['биологически_активные_вещества_список'].apply(lambda lst: [vocab_bio[x] for x in lst])
+df['ingredients_ids'] = df['ингредиенты_список'].apply(lambda lst: [vocab_ingredients[x] for x in lst])
+
+
+# %% [markdown]
+# Embedding слой
+
+# %%
+import torch
+import torch.nn as nn
+
+embedding_dim = 32
+
+emb_org = nn.Embedding(len(vocab_organs), embedding_dim)
+emb_grp = nn.Embedding(len(vocab_groups), embedding_dim)
+emb_bio = nn.Embedding(len(vocab_bio), embedding_dim)
+emb_ing = nn.Embedding(len(vocab_ingredients), embedding_dim)
+
+def embed_mean(id_list, emb_layer):
+  ids = torch.tensor(id_list, dtype=torch.long)
+  return emb_layer(ids).mean(dim=0) # усредняем
+
+
+# %% [markdown]
+# Финальные вектора признаков
+
+# %%
+df['org_vec'] = df['organs_ids'].apply(lambda x: embed_mean(x, emb_org).detach().numpy())
+df['grp_vec'] = df['groups_ids'].apply(lambda x: embed_mean(x, emb_grp).detach().numpy())
+df['bio_vec'] = df['bio_ids'].apply(lambda x: embed_mean(x, emb_bio).detach().numpy())
+df['ing_vec'] = df['ingredients_ids'].apply(lambda x: embed_mean(x, emb_ing).detach().numpy())
+
+# %% [markdown]
+# Объединяем все в общий вектор признаков
+
+# %%
+features_vectors = np.stack([
+    np.concatenate([
+        row['org_vec'],
+        row['grp_vec'],
+        row['bio_vec'],
+        row['ing_vec'],
+        row[num_cols].values,
+        row[binary_cols].values
+    ])
+    for _, row in df.iterrows()
+])
+
+
+# %% [markdown]
+# Иерархическая кластеризация
+
+# %%
+from sklearn.impute import SimpleImputer
+
+# Заполняем NaN средними значениями по каждому признаку
+imputer = SimpleImputer(strategy='mean')
+features_clean = imputer.fit_transform(features_vectors)
+
+# %%
+print(f"Тип features_vectors: {type(features_clean)}")
+print(f"Форма features_vectors: {features_clean.shape if hasattr(features_clean, 'shape') else 'Нет формы'}")
+
+# Посмотрим на первые несколько элементов
+print("Первые 3 элемента:")
+for i in range(min(3, len(features_clean))):
+    print(f"Элемент {i}: тип = {type(features_clean[i])}, значение = {features_clean[i][:50] if hasattr(features_clean[i], '__len__') else features_vectors[i]}")
+
+# %%
+from sklearn.cluster import AgglomerativeClustering
+import matplotlib.pyplot as plt
+import umap.umap_ as umap
+
+agg = AgglomerativeClustering(n_clusters=5, linkage='ward')
+df['cluster'] = agg.fit_predict(features_clean)
+
+reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, metric='cosine', random_state=42)
+coords = reducer.fit_transform(features_clean)
+
+plt.figure(figsize=(10,7))
+plt.scatter(coords[:,0], coords[:,1], c=df['cluster'], s=30, alpha=0.8)
+plt.colorbar(label="Cluster")
+plt.title("Кластеры БАДов в 2D проекции UMAP")
+plt.show()
+
+
+
+
+# %% [markdown]
 # # Сохранение изменений
 
 # %%
@@ -1818,3 +1986,5 @@ if IN_COLAB:
 
 else:
     pass
+
+# %%
