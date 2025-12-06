@@ -25,40 +25,84 @@
 # - Петруша Полина Георгиевна
 
 # %% [markdown]
-# Подключаем библиотеки
+# Импортируем и установим все необходимые для работы данного блокнота библиотеки
 
 # %%
-import requests
-from urllib.parse import urlencode
-from pathlib import Path
-import pandas as pd
-import numpy as np
+# Установка внешних библиотек
+# !pip install --upgrade pyvis
+
+# Стандартная библиотека Python
+import csv
+import json
+import math
+import os
+import sys
+import subprocess
+import colorsys
 import re
 from collections import Counter, defaultdict
-from tabulate import tabulate
+from io import StringIO
+from itertools import combinations
+from pathlib import Path
+import pathlib
+from urllib.parse import urlencode
+
+# Сторонние библиотеки
+import requests
+import numpy as np
+import pandas as pd
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 import seaborn as sns
 from scipy.stats import pearsonr
+import networkx as nx
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics.pairwise import cosine_similarity
+import pyvis
+from pyvis.network import Network
+from jinja2 import Environment, FileSystemLoader
+from tabulate import tabulate
 
+# %% [markdown]
+# Настроим pandas
+
+# %%
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', None)
+pd.set_option('display.max_colwidth', None)
+pd.set_option('display.max_rows', None)
+
+
+# %% [markdown]
+# Напишем некоторые вспомогательные функции
 
 # %% [markdown]
 # Функция для скачивания файлов с Яндекс.Диска
 
 # %%
-def load_from_yandex(public_key, file_type='auto'):
+def load_from_yandex(public_key, file_type='auto', filename=None):
     base_url = 'https://cloud-api.yandex.net/v1/disk/public/resources/download?'
     final_url = base_url + urlencode(dict(public_key=public_key))
 
     # Получаем ссылку для скачивания
     response = requests.get(final_url)
+    response.raise_for_status()
     download_url = response.json()['href']
 
     # Скачиваем файл
     file_response = requests.get(download_url)
+    file_response.raise_for_status()
+
+    # При необходимости сохраняем сырые данные в файл
+    if filename is not None:
+        with open(filename, 'wb') as f:
+            f.write(file_response.content)
 
     # Определяем тип файла
     if file_type == 'auto':
-        if 'text' in file_response.headers.get('content-type', '') or download_url.endswith(('.txt', '.csv')):
+        content_type = file_response.headers.get('content-type', '')
+        if 'text' in content_type or download_url.endswith(('.txt', '.csv')):
             file_type = 'text'
         elif download_url.endswith(('.xlsx', '.xls')):
             file_type = 'excel'
@@ -80,7 +124,7 @@ def load_from_yandex(public_key, file_type='auto'):
 
 
 # %% [markdown]
-# Напишем функцию, выводящую суммарную информацию о датафрейме
+# Функцию, выводящая суммарную информацию о датафрейме
 
 # %%
 def print_info(df):
@@ -110,33 +154,97 @@ def print_info(df):
 
 
 # %% [markdown]
-# Скачаем датасет с Яндекс.Диска
+# Функция преобразовангия CSV в словарь
 
 # %%
-public_key = "https://disk.yandex.ru/d/V1sJpR-SUJ_b8A"
-file_content = load_from_yandex(public_key)
-with open('dataset.xlsx', 'wb') as f:
-    f.write(file_content)
+
+# %%
+def csv_to_dict(csv_content, sep=',', key_index=0, value_index=1):
+    if isinstance(csv_content, bytes):
+        text = csv_content.decode('utf-8-sig')
+    else:
+        text = str(csv_content)
+
+    dict = {}
+    reader = csv.reader(StringIO(text), delimiter=sep, quotechar='"')
+
+    for row in reader:
+        if len(row) <= max(key_index, value_index):
+            continue
+
+        key = row[key_index].strip()
+        value = row[value_index].strip()
+
+        if key and value:
+            dict[key] = value
+
+    return dict
+
+
+# %% [markdown]
+# Функция для замены в датафрейме в числовом столбце значения по ключу на значение из словаря
+
+# %%
+def apply_scalar_corrections(df, mapping, key_column, target_column):
+    for key, value in mapping.items():
+        mask = df[key_column] == key
+        df.loc[mask, target_column] = value
+
+
+# %% [markdown]
+# Функция для замены в датафрейме в столбце с списком одного из значений по ключу на значение из словаря
+
+# %%
+def apply_str_list_corrections(df, mapping, target_column, sep=','):
+    def replace(value):
+        if pd.isna(value):
+            return value
+
+        parts = [p.strip() for p in str(value).split(sep)]
+        parts = [mapping.get(p, p) for p in parts if p]
+
+        return f'{sep} '.join(parts) if parts else ''
+
+    df[target_column] = df[target_column].apply(replace)
+
+
+# %% [markdown]
+# Функция для замены значения из списка в строке столбца на заданное значение.
+
+# %%
+def replace_exact(df, col, variants, target):
+    df.loc[df[col].isin(variants), col] = target
+
+
+# %% [markdown]
+# Скачаем датасет и файлы (патчи), корректирующие количество единиц за прием, приемов в день и названия ингредиентов
+
+# %%
+DATASET_URL = 'https://disk.yandex.ru/d/V1sJpR-SUJ_b8A'
+DATASET_NAME = 'dataset.xlsx'
+DOSAGE_UNITS_URL = 'https://disk.yandex.ru/d/qpV_VdGo10g6_w'
+DOSAGE_TIMES_URL = 'https://disk.yandex.ru/d/SNu6f9k2CXLDLA'
+CORRECT_NAME_OF_INGREDIENTS_URL = 'https://disk.yandex.ru/d/ZaIEDuJ0ew-SOw'
+
+_ = load_from_yandex(DATASET_URL, filename=DATASET_NAME)
+dosage_units_csv = load_from_yandex(DOSAGE_UNITS_URL, filename='dosage_units.csv')
+dosage_times_csv = load_from_yandex(DOSAGE_TIMES_URL, filename='dosage_units.csv')
+correct_names_of_ingredients_csv = load_from_yandex(CORRECT_NAME_OF_INGREDIENTS_URL, ',', filename='correct_names_of_ingredients.csv')
+
+# %% [markdown]
+# Преобразуем скачанные патчи в соответствующие словари
+
+# %%
+dosage_units_dict = csv_to_dict(dosage_units_csv, sep=':')
+dosage_times_dict = csv_to_dict(dosage_times_csv, sep=':')
+correct_names_of_ingredients_dict = csv_to_dict(correct_names_of_ingredients_csv, sep=',')
 
 # %% [markdown]
 # Прочитаем в датафрейм наш файл
 
 # %%
-xlsx_path = "dataset.xlsx"
-if not xlsx_path:
-    raise FileNotFoundError("xlsx файл не найден")
-print("Найден XLSX:", xlsx_path)
-df = pd.read_excel(xlsx_path, sheet_name=0, header=[0,1])
+df = pd.read_excel(DATASET_NAME, sheet_name=0, header=[0,1])
 print("Данные загружены в df")
-
-# %% [markdown]
-# Настроим pandas
-
-# %%
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', None)
-pd.set_option('display.max_colwidth', None)
-pd.set_option('display.max_rows', None)
 
 # %% [markdown]
 # # Предобработка данных
@@ -153,26 +261,23 @@ df.head()
 
 # %%
 def clean(s):
-    if s is None: return ""
-    s = str(s).replace("\n"," ").replace("\xa0"," ").strip()
-    return re.sub(r"\s+"," ", s)
+    if s is None:
+        return ""
+    s = str(s).replace("\n", " ").replace("\xa0", " ").strip()
+    return re.sub(r"\s+", " ", s)
 
 flat = []
 for top, sub in df.columns:
     top, sub = clean(top), clean(sub)
     name = sub if (not top or top.lower().startswith("unnamed")) else f"{top}__{sub}" if sub else top
-    name = name.replace("ё","е")
+    name = name.replace("ё", "е")
     name = re.sub(r"\s+", "_", name)
     name = re.sub(r"[\\/:;,\"'()]+", "_", name)
     name = re.sub(r"_+", "_", name).strip("_")
     name = name.lower()
     flat.append(name)
 
-cnt = Counter(flat); seen = defaultdict(int); uniq = []
-for n in flat:
-    seen[n] += 1
-    uniq.append(n if cnt[n] == 1 else f"{n}__{seen[n]}")
-df.columns = uniq
+df.columns = flat
 
 # %% [markdown]
 # Переименуем некоторые столбцы
@@ -191,144 +296,7 @@ to_rename = {
 df = df.rename(columns=to_rename)
 
 # %% [markdown]
-# Создадим новый столбец "рекомендации_по_применению". Информацию для них берем из столбца "этикетка", затем очищаем оттуда взятую информацию.
-
-# %%
-df['рекомендации_по_применению'] = pd.NA
-dot = 0
-
-for row in range(len(df)):
-    string = str(df.at[row, 'этикетка'])
-    value_1 = ""
-
-    dot = string.find(".")+1
-    second_dot_index = string.find(".", dot)
-
-    if second_dot_index != -1:
-        str_for_et = string[second_dot_index+1::].strip()
-    else:
-        str_for_et = string
-
-    if "Рекомендации по применению" not in string:
-        df.at[row, 'рекомендации_по_применению'] = None
-
-    else:
-        start_index = string.find("Рекомендации по применению")
-        current_string = string[start_index:]
-        duration_index = current_string.find("Продолжительность")
-
-        if duration_index != -1:
-            end_index = start_index + duration_index
-            value_1 = string[start_index:end_index].strip()
-
-            if value_1.endswith((':',' ','.')):
-                value_1 = value_1[:-1].strip()
-
-        else:
-            index = 0
-            while True:
-                if index + 1 >= len(current_string):
-                    value_1 = current_string.strip()
-                    break
-
-                if current_string[index+1] != ".":
-                    index += 1
-                else:
-                    value_1 = string[start_index : start_index + index + 2].strip()
-                    break
-
-    df.at[row, 'рекомендации_по_применению'] = value_1
-    df.at[row, 'этикетка'] = str_for_et
-
-# %% [markdown]
-# Создадим новые столбцы:
-# - "количество единиц на прием"
-# - "количество приемов в день"
-# - "суммарное количество единиц за период" (количество единиц на приеме * количество приемов в день * продолжительность приема)
-
-# %%
-# Настройки для полного отображения текста
-pd.set_option('display.max_colwidth', None)  # Без ограничения ширины столбцов
-pd.set_option('display.max_rows', None)      # Показывать все строки
-
-df["количество_единиц_на_прием"] = pd.NA
-df["количество_приемов_в_день"] = pd.NA
-df["суммарное_количество_единиц_за_период"] = pd.NA
-
-re_po_range = re.compile(r'по\s*(\d+)\s*-\s*(\d+)', flags=re.IGNORECASE)
-re_po_single = re.compile(r'по\s*(\d+)(?!\s*-\s*\d+)', flags=re.IGNORECASE)
-re_grams = re.compile(r'\((\d+)\s*г\)', flags=re.IGNORECASE)
-re_times_range = re.compile(r'(\d+)\s*-\s*(\d+)\s*раз', flags=re.IGNORECASE)
-re_times_single = re.compile(r'(\d+)\s*раз', flags=re.IGNORECASE)
-re_grams_inline = re.compile(r'\b(\d+)\s*(?:г\b|грамм\w*)', flags=re.IGNORECASE)
-re_ml = re.compile(r'\b(\d+)\s*мл\b(?!\s*питьевой воды)', flags=re.IGNORECASE)
-
-for i in range(len(df)):
-    string_raw = str(df.at[i, 'рекомендации_по_применению'])
-    string = string_raw.lower()
-    units = np.nan
-    times = np.nan
-
-    # количество_единиц_на_прием
-    m = re_po_range.search(string)
-    if m:
-        units = int(m.group(2))
-    else:
-        m = re_po_single.search(string)
-        if m:
-            units = int(m.group(1))
-        else:
-            if 'пакет' in string:
-                idx = string.find('пакет')
-                left_window = string[max(0, idx-12):idx]
-                m = re.search(r'(\d+)\s*-\s*(\d+)', left_window)
-                if m:
-                    units = int(m.group(2))
-                else:
-                    m = re.search(r'(\d+)', left_window)
-                    if m:
-                        units = int(m.group(1))
-            if np.isnan(units):
-                m = re_grams.search(string)
-                if m:
-                    units = int(m.group(1))
-            if np.isnan(units):
-                m = re_grams_inline.search(string)
-                if m:
-                    units = int(m.group(1))
-            if np.isnan(units):
-                m = re_ml.search(string)
-                if m:
-                    units = int(m.group(1))
-    df.at[i, 'количество_единиц_на_прием'] = units
-
-    # количество_приемов_в_день
-    times = 1
-    m = re_times_range.search(string)
-    if m:
-        times = int(m.group(2))
-    else:
-        m = re_times_single.search(string)
-        if m:
-            times = int(m.group(1))
-    df.at[i, 'количество_приемов_в_день'] = times
-
-yandex_url1 = "https://disk.yandex.ru/d/aai4Di0mdUuITw"
-yandex_url2 = "https://disk.yandex.ru/d/Su4aCUDzBKlWNA"
-corrections1 = load_from_yandex(yandex_url1)
-corrections2 = load_from_yandex(yandex_url2)
-
-for name, value in corrections1.items():
-    mask = df['наименование'] == name
-    df.loc[mask, 'количество_единиц_на_прием'] = value
-
-for name, value in corrections2.items():
-    mask = df['наименование'] == name
-    df.loc[mask, 'количество_приемов_в_день'] = value
-
-
-# %% [markdown]
-# Напишем функцию, которая заменяет значение из списка в строке столбца на заданное значение. Таким образом, заменим:
+# Теперь заменим:
 # - орфографические ошибки
 # - продолжительность приёма в значение месяца по максимальному значению
 # - срок годности в месяцы
@@ -336,9 +304,6 @@ for name, value in corrections2.items():
 # - столбцы с двумя уникальными значениями в бинарные
 
 # %%
-def replace_exact(df, col, variants, target):
-    df.loc[df[col].isin(variants), col] = target
-
 pairs = [
     # Исправление орфографических ошибок
     ["пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты", ["аминоксилоты"], "аминокислоты"],
@@ -418,29 +383,483 @@ pairs = [
     ["форма_выпуска", ["таблетки, капсулы, сбор","капсулы, сбор"], "твердое, сборы"],
     ["форма_выпуска", ["капсулы, порошок, пасты"], "твердое, сыпучее, полутвердое"],
     ["форма_выпуска", ["раствор, сбор"], "жидкое, сборы"],
+
+    # Преобразуем некоторые столбцы для последующей бинаризации
+    ["происхождение", ["иностранное"], pd.NA],
+    ["происхождение_природное_синтетическое", ["Синтетическое"], pd.NA],
 ]
 
 for i in range(len(pairs)):
     replace_exact(df, pairs[i][0],pairs[i][1], pairs[i][2])
 
 # %% [markdown]
-# Объединение группы столбцов:
+# Создадим новые столбцы:
+# - "рекомендации_по_применению"
+# - "количество_единиц_на_прием"
+# - "количество_приемов_в_день"
+# - "ингредиент_описание"
+# - "ингредиент_кир"
+# - "ингредиент_лат"
+# - "биологически_активные_вещества"
+# - "системы_органов"
+# - "группа_населения"
+# - "суммарное_количество_единиц_за_период" = (количество единиц на приеме * количество приемов в день * продолжительность приема) (после привдения столбцов к неободимому типу)
 #
-# - J-X: Биологически_активные_вещества
-# - Y-AL: Системы_органов
-# - AQ-AU: Группа_населения
-#
-# Они заносятся в отдельный датафрей и в дальнейшем добавляются к основному датафрейму
-
-# %% [markdown]
-# Сделаем список столбцов которые мы хотим объединить
-# 1. биологически_вещества
-# 2. системы_органов
-# 3. группа_населения
 
 # %%
-df_copy=df.copy()
-biolog_columns = [
+df['рекомендации_по_применению'] = pd.NA
+df["количество_единиц_на_прием"] = pd.NA
+df["количество_приемов_в_день"] = pd.NA
+df["суммарное_количество_единиц_за_период"] = pd.NA
+df["ингредиент_описание"] = pd.NA
+df["ингредиент_кир"] = pd.NA
+df["ингредиент_лат"] = pd.NA
+df["биологически_активные_вещества"] = pd.NA
+df["системы_органов"] = pd.NA
+df["группа_населения"] = pd.NA
+
+# %% [markdown]
+# Теперь перейдем к заполнению столбцов
+
+# %% [markdown]
+# Информацию для столбца "рекомендации_по_применению" берем из столбца "этикетка", а затем очищаем взятую оттуда информацию
+
+# %%
+dot = 0
+
+for row in range(len(df)):
+    string = str(df.at[row, 'этикетка'])
+    value_1 = ""
+
+    dot = string.find(".")+1
+    second_dot_index = string.find(".", dot)
+
+    if second_dot_index != -1:
+        str_for_et = string[second_dot_index+1::].strip()
+    else:
+        str_for_et = string
+
+    if "Рекомендации по применению" not in string:
+        df.at[row, 'рекомендации_по_применению'] = None
+
+    else:
+        start_index = string.find("Рекомендации по применению")
+        current_string = string[start_index:]
+        duration_index = current_string.find("Продолжительность")
+
+        if duration_index != -1:
+            end_index = start_index + duration_index
+            value_1 = string[start_index:end_index].strip()
+
+            if value_1.endswith((':',' ','.')):
+                value_1 = value_1[:-1].strip()
+
+        else:
+            index = 0
+            while True:
+                if index + 1 >= len(current_string):
+                    value_1 = current_string.strip()
+                    break
+
+                if current_string[index+1] != ".":
+                    index += 1
+                else:
+                    value_1 = string[start_index : start_index + index + 2].strip()
+                    break
+
+    df.at[row, 'рекомендации_по_применению'] = value_1
+    df.at[row, 'этикетка'] = str_for_et
+
+# %% [markdown]
+# Информацию для столбцов:
+# - "количество_единиц_на_прием"
+# - "количество_приемов_в_день"
+#
+# возьмем из "рекомендации_по_применению".
+
+# %%
+re_po_range = re.compile(r'по\s*(\d+)\s*-\s*(\d+)', flags=re.IGNORECASE)
+re_po_single = re.compile(r'по\s*(\d+)(?!\s*-\s*\d+)', flags=re.IGNORECASE)
+re_grams = re.compile(r'\((\d+)\s*г\)', flags=re.IGNORECASE)
+re_times_range = re.compile(r'(\d+)\s*-\s*(\d+)\s*раз', flags=re.IGNORECASE)
+re_times_single = re.compile(r'(\d+)\s*раз', flags=re.IGNORECASE)
+re_grams_inline = re.compile(r'\b(\d+)\s*(?:г\b|грамм\w*)', flags=re.IGNORECASE)
+re_ml = re.compile(r'\b(\d+)\s*мл\b(?!\s*питьевой воды)', flags=re.IGNORECASE)
+
+for i in range(len(df)):
+    string_raw = str(df.at[i, 'рекомендации_по_применению'])
+    string = string_raw.lower()
+    units = np.nan
+    times = np.nan
+
+    # количество_единиц_на_прием
+    m = re_po_range.search(string)
+    if m:
+        units = int(m.group(2))
+    else:
+        m = re_po_single.search(string)
+        if m:
+            units = int(m.group(1))
+        else:
+            if 'пакет' in string:
+                idx = string.find('пакет')
+                left_window = string[max(0, idx-12):idx]
+                m = re.search(r'(\d+)\s*-\s*(\d+)', left_window)
+                if m:
+                    units = int(m.group(2))
+                else:
+                    m = re.search(r'(\d+)', left_window)
+                    if m:
+                        units = int(m.group(1))
+            if np.isnan(units):
+                m = re_grams.search(string)
+                if m:
+                    units = int(m.group(1))
+            if np.isnan(units):
+                m = re_grams_inline.search(string)
+                if m:
+                    units = int(m.group(1))
+            if np.isnan(units):
+                m = re_ml.search(string)
+                if m:
+                    units = int(m.group(1))
+    df.at[i, 'количество_единиц_на_прием'] = units
+
+    # количество_приемов_в_день
+    times = 1
+    m = re_times_range.search(string)
+    if m:
+        times = int(m.group(2))
+    else:
+        m = re_times_single.search(string)
+        if m:
+            times = int(m.group(1))
+    df.at[i, 'количество_приемов_в_день'] = times
+
+# %% [markdown]
+# Применим патчи к получившемся значениям в столбцах
+
+# %%
+apply_scalar_corrections(df, dosage_units_dict, "наименование", "количество_единиц_на_прием")
+apply_scalar_corrections(df, dosage_times_dict, "наименование", "количество_приемов_в_день")
+
+
+# %% [markdown]
+# Информацию для столбцов:
+# - "ингредиент_описание"
+# - "ингредиент_рус"
+# - "ингредиент_лат"
+#
+# возьмем из столбца "сырье"
+
+# %% [markdown]
+# Функция для парсинга строки с сырьем на отдельные ингредиенты (если много ингредиентов через запятую)
+
+# %%
+# Парсим строку с сырьем
+def parse_ingredient_string(raw_string):
+  if pd.isna(raw_string) or not raw_string.strip():
+    return []
+
+  ingredients = []
+  current = []
+  bracket_count = 0
+  quote_count = 0
+
+  for char in raw_string:
+    if char == '(':
+      bracket_count += 1
+    elif char == ')':
+      bracket_count -= 1
+    elif char == '"':
+      quote_count = 1 - quote_count
+
+    if char == ',' and bracket_count == 0 and quote_count == 0:
+      ingredient_str = ''.join(current).strip()
+      if ingredient_str:
+        ingredients.append(ingredient_str)
+      current = []
+    else:
+      current.append(char)
+
+  if current:
+    ingredient_str = ''.join(current).strip()
+    if ingredient_str:
+      ingredients.append(ingredient_str)
+
+  return ingredients
+
+
+# %% [markdown]
+# Функция точно отличающая название на латинице или кириллице
+
+# %%
+def detect_language(text):
+    cyrillic_count = len(re.findall(r'[а-яА-Я]', text))
+    latin_count = len(re.findall(r'[a-zA-Z]', text))
+
+    if cyrillic_count > latin_count:
+        return 'cyrillic'
+    elif latin_count > cyrillic_count:
+        return 'latin'
+    else:
+        # Если равное количество символов или оба нуля, используем дополнительные признаки
+        if re.search(r'[а-яА-Я]', text):
+            return 'cyrillic'
+        elif re.search(r'[a-zA-Z]', text):
+            return 'latin'
+        return 'unknown'
+
+
+# %% [markdown]
+# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
+
+# %%
+def parse_single_ingredient(ingredient):
+    ingredient = str(ingredient).strip().lower()
+
+    if ingredient in ['nan', 'None', '']:
+        return (pd.NA, pd.NA, pd.NA)
+
+    if '(' in ingredient and ')' not in ingredient:
+        ingredient = ingredient + ')'
+    pattern1 = r'^(.+?)\s*\(([^()]+?)\s*[–\-—]\s*([^()]+?)\)\s*\.?$'
+    match1 = re.match(pattern1, ingredient)
+
+    if 'содержит бактерии' in ingredient:
+      return (ingredient, pd.NA, pd.NA)
+    if match1:
+        description = match1.group(1).strip()
+        first_part = match1.group(2).strip()
+        second_part = match1.group(3).strip()
+
+        description = description.rstrip('.')
+        first_part = first_part.rstrip('.').strip('–').strip()
+        second_part = second_part.rstrip('.').strip('–').strip()
+
+        # Определяем язык для каждой части
+        lang_first = detect_language(first_part)
+        lang_second = detect_language(second_part)
+
+        if lang_first == 'cyrillic' and lang_second == 'latin':
+            return (description, first_part, second_part)
+        elif lang_first == 'latin' and lang_second == 'cyrillic':
+            if bool(re.search(r'[a-zA-Z]', second_part)) and ingredient.count("-") == 2:
+              first_part += "-" + second_part[:second_part.find("-")]
+              second_part = second_part[second_part.find("-")+1:]
+            return (description, second_part, first_part)
+
+        return (description, second_part, first_part)
+
+    pattern2 = r'^(.+?)\s*\(([^()]+?)\)\s*\.?$'
+    match2 = re.match(pattern2, ingredient)
+
+    if match2:
+        description = match2.group(1).strip()
+        content = match2.group(2).strip()
+
+        has_latin = bool(re.search(r'[a-zA-Z]', content))
+        has_cyrillic = bool(re.search(r'[а-яА-Я]', content))
+
+        description = description.rstrip('.')
+        content = content.rstrip('.').strip('–').strip()
+
+        if has_latin and not has_cyrillic:
+          return (description, pd.NA, content)
+        elif has_cyrillic and not has_latin:
+            return (description, content, pd.NA)
+        else:
+            return (description, content, pd.NA)
+
+    ingredient = ingredient.rstrip('.')
+    return (ingredient, pd.NA, pd.NA)
+
+
+# %%
+for row in range(len(df)):
+    raw_value = df.at[row, "сырье"]
+
+    if pd.isna(raw_value) or str(raw_value).strip() in ['', 'nan', 'None']:
+        df.at[row, "ингредиент_описание"] = pd.NA
+        df.at[row, "ингредиент_кир"] = pd.NA
+        df.at[row, "ингредиент_лат"] = pd.NA
+        continue
+
+    string = str(raw_value).strip().lower()
+    ingredients = parse_ingredient_string(string)
+
+    if not ingredients:
+        description, cyryllic, latin = parse_single_ingredient(string)
+        df.at[row, "ингредиент_описание"] = description
+        df.at[row, "ингредиент_кир"] = cyrillic
+        df.at[row, "ингредиент_лат"] = latin
+
+    else:
+        description_list = []
+        cyrillic_list = []
+        latin_list = []
+
+        for ingredient in ingredients:
+            description, cyrillic, latin = parse_single_ingredient(ingredient)
+            if description:
+                description_list.append(description)
+            if pd.notna(cyrillic):
+                cyrillic_list.append(cyrillic)
+            if pd.notna(latin):
+                latin_list.append(latin)
+
+        df.at[row, "ингредиент_описание"] = ", ".join(description_list) if description_list else pd.NA
+        df.at[row, "ингредиент_кир"] = ", ".join(cyrillic_list) if cyrillic_list else pd.NA
+        df.at[row, "ингредиент_лат"] = ", ".join(latin_list) if latin_list else pd.NA
+
+# %% [markdown]
+# Удалим строки, у которых природное происхождение, но отсутствуют данные о сырье
+
+# %%
+indx_for_drop = []
+for i in range(len(df)):
+  if "Синтетическое" not in str(df.at[i, "происхождение_природное_синтетическое"]) and pd.isna(df.at[i, "сырье"]):
+    indx_for_drop.append(i)
+
+df = df.drop(indx_for_drop)
+
+
+# %% [markdown]
+# Функция для извлечения ингредиентов из строки описания
+
+# %%
+def extract_ingredients(description):
+    if pd.isna(description) or description == "":
+        return []
+
+    # Удаляем содержимое в скобках
+    description_clean = re.sub(r'\([^)]*\)', '', str(description)).lower()
+
+    # Разделяем по запятым и очищаем от лишних пробелов
+    ingredients = [ing.strip().lower() for ing in description_clean.split(',')]
+
+    # Удаляем пустые строки и строки, содержащие только знаки препинания
+    ingredients = [ing for ing in ingredients if ing and ing.strip()]
+
+    return ingredients
+
+
+# %% [markdown]
+# Удаление дополнительных кавычек и точек
+
+# %%
+def clean_ingredient_name(ingredient):
+    # Удаляем кавычки в начале и конце
+    ingredient = re.sub(r'^["\']|["\']$', '', ingredient)
+    # Удаляем точки в конце
+    ingredient = re.sub(r'\.$', '', ingredient)
+    # Удаляем лишние пробелы
+    ingredient = ingredient.strip()
+    return ingredient
+
+
+# %% [markdown]
+# Теперь применим патч к столбцу "ингредиент_описание"
+
+# %%
+apply_str_list_corrections(df, correct_names_of_ingredients_dict, "ингредиент_описание", ",")
+
+# %% [markdown]
+# Теперь заполним столбцы:
+# - "биологически_активные_вещества"
+# - "системы_органов"
+# - "группа_населения"
+#
+# следующим образом
+# - Столбцы J-X исходного датасета -> "биологически_активные_вещества"
+# - Столбцы Y-AL исходного датасета -> "системы_органов"
+# - Столбцы AQ-AU исходного датасета -> "группа_населения"
+
+# %%
+bio_prefixes = (
+    "пищевые_вещества_",
+    "минорные_компоненты_растений_",
+    "пробиотики_",
+    "минеральные_и_минерало_органические_природные_субстанции_"
+)
+
+cols_bioactive = [c for c in df.columns if c.startswith(bio_prefixes)]
+cols_systems_organs = [c for c in df.columns if c.startswith("система_органов")]
+cols_population_groups = [c for c in df.columns if c.startswith("группа_населения")]
+
+
+# %% [markdown]
+# Функция для объединения столбцов
+
+# %%
+def build_multi_value_column(df, source_columns, target_column):
+    def collect(row):
+        values = []
+        for col in source_columns:
+            val = row[col]
+
+            if isinstance(val, str) and val.strip():
+                values.append(val.strip())
+
+        if not values:
+            return pd.NA
+
+        seen = set()
+        uniq = []
+        for v in values:
+            if v not in seen:
+                seen.add(v)
+                uniq.append(v)
+
+        return ", ".join(uniq)
+
+    df[target_column] = df.apply(collect, axis=1)
+
+
+
+# %%
+build_multi_value_column(df, source_columns=cols_bioactive, target_column="биологически_активные_вещества")
+build_multi_value_column(df, source_columns=cols_systems_organs, target_column="системы_органов")
+build_multi_value_column(df, source_columns=cols_population_groups, target_column="группа_населения")
+
+
+# %% [markdown]
+# Сейчас в столбце "количество_групп_компонентов" число больше трех помечено как "много". Считаем что это некорректно, поэтому пересчитаем по количеству биологически-активных веществ в столбце "биологически_активные_вещества"
+
+# %%
+def count_items(text, sep=','):
+    if pd.isna(text):
+        return 0
+    parts = str(text).split(sep)
+    return sum(1 for part in parts if part.strip())
+
+df['количество_групп_компонентов'] = df['биологически_активные_вещества'].apply(count_items)
+
+
+# %% [markdown]
+# Преобразуем столбцы, которые возможно к бинарному виду и для этого напишем функцию, которая переводит по следующему правилу:
+# - 'NaN' или '' -> 0
+# - Любая другая строка -> 1
+
+# %%
+def to_binary(value):
+    if pd.isna(value):
+        return 0
+
+    text = str(value).strip()
+    if text == "" or text.lower() == "nan" or text == "0":
+        return 0
+
+    return 1
+
+
+# %% [markdown]
+# Перечислим столбцы, требующей бинаризации
+
+# %%
+binary_columns = [
+    "происхождение",
+    "происхождение_природное_синтетическое",
     "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
     "пищевые_вещества_макро_и_микроэлементы",
     "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
@@ -449,114 +868,6 @@ biolog_columns = [
     "минорные_компоненты_растений_фенольные_соединения",
     "минорные_компоненты_растений_алкалоиды",
     "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
-    "минорные_компоненты_растений_сапонины",
-    "минорные_компоненты_растений_терпеноиды",
-    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
-    "минорные_компоненты_растений_гидроксикоричные_кислоты",
-    "минорные_компоненты_растений_ферменты",
-    "минорные_компоненты_растений_дубильные_вещества",
-    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты"
-]
-
-sys_org = []
-for col in df.columns:
-    if col.startswith("система_органов"):
-        sys_org.append(col)
-
-group_people = []
-for col in df.columns:
-   if col.startswith("группа_населения"):
-    group_people.append(col)
-
-
-# %% [markdown]
-# Функция для объединения столбцов
-
-# %%
-def combine_columns(df, cols, name_map=None):
-    def get_values(row):
-        out = []
-        for col in cols:
-            val = row[col]
-            if isinstance(val, (int, float)) and val == 1:
-                pretty = name_map[col] if name_map and col in name_map else col
-                out.append(pretty)
-            elif isinstance(val, str) and val.strip():
-                out.append(val.strip())
-        if not out:
-            return None
-
-        return ", ".join(dict.fromkeys(out))
-    return df.apply(get_values, axis=1)
-
-
-# %%
-df_bi=combine_columns(df_copy, biolog_columns, "биологически_активные_вещества")
-df_sy=combine_columns(df_copy, sys_org, "системы_органов")
-df_gr=combine_columns(df_copy, group_people, "группа_населения")
-
-df_save=pd.DataFrame({
-    "биологически_активные_вещества": df_bi,"системы_органы": df_sy,"группы_населения": df_gr})
-
-# %% [markdown]
-# Теперь, после создания объединенного столбца, для понимания корреляции, преобразуем значения столбцов, которые позже удалим, в бинарные
-
-# %%
-pairs_to_bin = [
-    ["происхождение", ["иностранное"], "0"],
-    ["происхождение", ["отечественное"], "1"],
-    ["пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты", ["вит"], "1"],
-    ["пищевые_вещества_макро_и_микроэлементы", ["элементы"], "1"],
-    ["пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты", ["аминокислоты"], "1"],
-    ["минорные_компоненты_растений_фенольные_соединения", ["фенольн"], "1"],
-    ["минорные_компоненты_растений_алкалоиды", ["алкалоиды"], "1"],
-    ["пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы", ["пробиотики"], "1"],
-    ["пищевые_вещества_углеводы_и_продукты_их_переработки", ["полисахариды"], "1"],
-    ["минорные_компоненты_растений_сапонины", ["сапонины"], "1"],
-    ["минорные_компоненты_растений_терпеноиды", ["терпен"], "1"],
-    ["минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма", ["ест"], "1"],
-    ["минорные_компоненты_растений_гидроксикоричные_кислоты", ["гидроксикор"], "1"],
-    ["минорные_компоненты_растений_ферменты", ["ферменты"], "1"],
-    ["минорные_компоненты_растений_дубильные_вещества", ["дуб"], "1"],
-    ["минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты", ["цеолиты"], "1"],
-    ["система_органов_для_беременных_кормящих_и_планирующих_беременность", ["беременные"], "1"],
-    ["система_органов_костно_мышечная_система", ["суставы"], "1"],
-    ["система_органов_нервная_система", ["нервная"], "1"],
-    ["система_органов_иммунная_система", ["иммунитет"], "1"],
-    ["система_органов_пищеварительный_тракт_и_обмен_веществ", ["жкт"], "1"],
-    ["система_органов_мочеполовая_система", ["почки"], "1"],
-    ["система_органов_дерматологические_бад", ["кожа"], "1"],
-    ["система_органов_органы_чувств", ["глаза"], "1"],
-    ["система_органов_сердечно_сосудистая_система", ["сердце"], "1"],
-    ["система_органов_противоопухолевые_бад", ["онко"], "1"],
-    ["система_органов_противопаразитарные_бад", ["паразиты"], "1"],
-    ["система_органов_кровь_и_система_кроветворения", ["кровь"], "1"],
-    ["группа_населения_предназначен_для_детей", ["дети"], "1"],
-    ["группа_населения_предназначен_для_взрослых", ["взрослые"], "1"],
-    ["группа_населения_пожилые", ["пожилые"], "1"]
-]
-
-for i in range(len(pairs_to_bin)):
-    replace_exact(df, pairs_to_bin[i][0],pairs_to_bin[i][1], pairs_to_bin[i][2])
-
-# %% [markdown]
-# Изменим тип некоторых столбцов
-
-# %%
-df["продолжительность_приема"] = (pd.to_numeric(df["продолжительность_приема"], errors="coerce").astype("Int64"))
-df["срок_годности"] = (pd.to_numeric(df["срок_годности"],errors="coerce").astype("Float64"))
-df["группа_населения_возраст_детей"] = (pd.to_numeric(df["группа_населения_возраст_детей"], errors="coerce").astype("Int64"))
-df["происхождение"] = pd.to_numeric(df["происхождение"], errors="coerce").astype("Int8")
-df["количество_единиц_на_прием"] = pd.to_numeric(df["количество_единиц_на_прием"]).astype("Int64")
-df["количество_приемов_в_день"] = pd.to_numeric(df["количество_приемов_в_день"]).astype("Int64")
-binary_cols = [
-    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
-    "пищевые_вещества_макро_и_микроэлементы",
-    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
-    "минорные_компоненты_растений_фенольные_соединения",
-    "минорные_компоненты_растений_алкалоиды",
-    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
-    "пищевые_вещества_углеводы_и_продукты_их_переработки",
     "минорные_компоненты_растений_сапонины",
     "минорные_компоненты_растений_терпеноиды",
     "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
@@ -575,21 +886,48 @@ binary_cols = [
     "система_органов_сердечно_сосудистая_система",
     "система_органов_противоопухолевые_бад",
     "система_органов_противопаразитарные_бад",
+    "система_органов_дыхательная_система",
     "система_органов_кровь_и_система_кроветворения",
+    "система_органов_противомикробные_бад",
     "группа_населения_предназначен_для_детей",
     "группа_населения_предназначен_для_взрослых",
     "группа_населения_пожилые",
 ]
-for col in binary_cols:
-    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype("Int8")
+
 
 # %% [markdown]
-# Посчитаем столбец "суммарное_количество_единиц_за_период"
+# Применим ко всем этим столбцам
 
 # %%
-df['суммарное_количество_единиц_за_период'] = (
-    df['количество_единиц_на_прием'] * df['количество_приемов_в_день'] * df['продолжительность_приема'] * 30
-)
+for col in binary_columns:
+    df[col] = df[col].apply(to_binary).astype("Int8")
+
+# %% [markdown]
+# Теперь изменим тип столбцов
+
+# %%
+num_cols = [
+    "продолжительность_приема",
+    "количество_единиц_на_прием",
+    "количество_приемов_в_день",
+]
+
+for col in num_cols:
+    df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+df["суммарное_количество_единиц_за_период"] = (df["продолжительность_приема"] * df["количество_единиц_на_прием"] * df["количество_приемов_в_день"] * 30).astype("Int64")
+
+df["срок_годности"] = df["срок_годности"].astype("Float64")
+
+
+# %%
+print_info(df)
+
+# %% [markdown]
+# # Визуализицаия (Матрицы корреляций и графы)
+
+# %% [markdown]
+# # Матрицы корреляций и Heatmaps
 
 # %% [markdown]
 # Посмотрим корреляцию числовых признаков
@@ -600,21 +938,6 @@ numeric_df = df[numeric_columns].copy()
 
 correlation_pearson = numeric_df.corr(method='pearson') # linear data
 correlation_spearman = numeric_df.corr(method='spearman') # unlinear data
-
-
-# %% [markdown]
-# Определим количество компонентов в столбце "биологически_активные_вещества" и занесем эти данные в столбец "количество_групп_компонентов"
-
-# %%
-def count_items(text):
-    if pd.isna(text):
-        return 0
-    items = str(text).split(',')
-    return len([item for item in items if item.strip()])
-
-df_save['количество_групп_компонентов'] = df_save['биологически_активные_вещества'].apply(count_items)
-df['количество_групп_компонентов'] = df_save['количество_групп_компонентов']
-df_save = df_save.drop('количество_групп_компонентов', axis=1)
 
 # %% [markdown]
 # Heatmap на основе корреляции
@@ -645,16 +968,18 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# Выберем пары с самой высокой корреляцией
+# Выберем пары с самой высокой корреляцией по заданному порогу
 
 # %%
+threshold_for_corr_in_numeric_columns = 0.2
+
 correlation_matrix = df[numeric_columns].corr()
 
 strong_pairs = []
 for i in range(len(correlation_matrix.columns)):
   for j in range(i+1, len(correlation_matrix.columns)):
     corr = correlation_matrix.iloc[i, j]
-    if abs(corr) >= 0.2 and (j != "количество_приемов_в_день"):
+    if abs(corr) >= threshold_for_corr_in_numeric_columns:
       strong_pairs.append({
           'feature1': correlation_matrix.columns[i],
           'feature2': correlation_matrix.columns[j],
@@ -678,7 +1003,7 @@ significant_pairs = [
 
 
 # %% [markdown]
-# Построим диаграмму рассеивания для пар с самой высокой корреляцией
+# Построим диаграмму рассеивания для получившехся пар
 
 # %%
 if significant_pairs:
@@ -757,11 +1082,11 @@ if significant_pairs:
 
                 # 3. Вычисляем дополнительную статистику
                 stats_text = f"""N = {len(data_pair)}
-Корреляция = {corr_value:.3f}
-p-value = {pearsonr(x_data, y_data)[1]:.4f}
-R² = {corr_value**2:.3f}
-x: μ={x_data.mean():.2f} σ={x_data.std():.2f}
-y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
+                Корреляция = {corr_value:.3f}
+                p-value = {pearsonr(x_data, y_data)[1]:.4f}
+                R² = {corr_value**2:.3f}
+                x: μ={x_data.mean():.2f} σ={x_data.std():.2f}
+                y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
 
                 # 4. Добавляем текстовый блок со статистикой
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
@@ -798,368 +1123,44 @@ y: μ={y_data.mean():.2f} σ={y_data.std():.2f}"""
     plt.show()
 
 # %% [markdown]
-# Объединение столбцов:"биологически_активные_вещества", "системы_органов", "группа_населения" с основынм датафреймом. Удаляем столбцы, которые были использованы при объединении
+# Построим матрицу корреляций для ингредиентов, встречающихся больше заданного значения раз
 
 # %%
-df = df.join(df_save)
-for col in biolog_columns:
-  df = df.drop(col, axis=1)
-for col in sys_org:
-  df = df.drop(col, axis=1)
-for col in group_people:
-  df = df.drop(col, axis=1)
+threshold_for_corr_in_ingredients = 0.2
 
-# %% [markdown]
-# Добавим парсинг столбца сырье на ингредиент_описание, ингредиент_рус, ингредиент_лат
-
-# %% [markdown]
-# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
-
-# %%
-import re
-
-# Парсим строку с сырьем
-def parse_ingredient_string(raw_string):
-  if pd.isna(raw_string) or not raw_string.strip():
-    return []
-
-  ingredients = []
-  current = []
-  bracket_count = 0
-  quote_count = 0
-
-  for char in raw_string:
-    if char == '(':
-      bracket_count += 1
-    elif char == ')':
-      bracket_count -= 1
-    elif char == '"':
-      quote_count = 1 - quote_count
-
-    if char == ',' and bracket_count == 0 and quote_count == 0:
-      ingredient_str = ''.join(current).strip()
-      if ingredient_str:
-        ingredients.append(ingredient_str)
-      current = []
-    else:
-      current.append(char)
-
-  if current:
-    ingredient_str = ''.join(current).strip()
-    if ingredient_str:
-      ingredients.append(ingredient_str)
-
-  return ingredients
-
-
-# %% [markdown]
-# Функция точно определяет, где русское название, а где латинское
-
-# %%
-def detect_language(text):
-    cyrillic_count = len(re.findall(r'[а-яА-Я]', text))
-    latin_count = len(re.findall(r'[a-zA-Z]', text))
-
-    if cyrillic_count > latin_count:
-        return 'russian'
-    elif latin_count > cyrillic_count:
-        return 'latin'
-    else:
-        # Если равное количество символов или оба нуля, используем дополнительные признаки
-        if re.search(r'[а-яА-Я]', text):
-            return 'russian'
-        elif re.search(r'[a-zA-Z]', text):
-            return 'latin'
-        return 'unknown'
-
-
-# %% [markdown]
-# Функция для парсинга строки с сырьем на отдельные ингредиенты(если много ингредиентов через запятую)
-
-# %%
-def parse_single_ingredient(ingredient):
-    ingredient = str(ingredient).strip().lower()
-
-    if ingredient in ['nan', 'None', '']:
-        return (pd.NA, pd.NA, pd.NA)
-
-    if '(' in ingredient and ')' not in ingredient:
-        ingredient = ingredient + ')'
-    pattern1 = r'^(.+?)\s*\(([^()]+?)\s*[–\-—]\s*([^()]+?)\)\s*\.?$'
-    match1 = re.match(pattern1, ingredient)
-
-    if 'содержит бактерии' in ingredient:
-      return (ingredient, pd.NA, pd.NA)
-    if match1:
-        description = match1.group(1).strip()
-        first_part = match1.group(2).strip()
-        second_part = match1.group(3).strip()
-
-        description = description.rstrip('.')
-        first_part = first_part.rstrip('.').strip('–').strip()
-        second_part = second_part.rstrip('.').strip('–').strip()
-
-        # Определяем язык для каждой части
-        lang_first = detect_language(first_part)
-        lang_second = detect_language(second_part)
-
-        if lang_first == 'russian' and lang_second == 'latin':
-            return (description, first_part, second_part)
-        elif lang_first == 'latin' and lang_second == 'russian':
-            if bool(re.search(r'[a-zA-Z]', second_part)) and ingredient.count("-") == 2:
-              first_part += "-" + second_part[:second_part.find("-")]
-              second_part = second_part[second_part.find("-")+1:]
-            return (description, second_part, first_part)
-
-        return (description, second_part, first_part)
-
-    pattern2 = r'^(.+?)\s*\(([^()]+?)\)\s*\.?$'
-    match2 = re.match(pattern2, ingredient)
-
-    if match2:
-        description = match2.group(1).strip()
-        content = match2.group(2).strip()
-
-        has_latin = bool(re.search(r'[a-zA-Z]', content))
-        has_cyrillic = bool(re.search(r'[а-яА-Я]', content))
-
-        description = description.rstrip('.')
-        content = content.rstrip('.').strip('–').strip()
-
-        if has_latin and not has_cyrillic:
-          return (description, pd.NA, content)
-        elif has_cyrillic and not has_latin:
-            return (description, content, pd.NA)
-        else:
-            return (description, content, pd.NA)
-
-    ingredient = ingredient.rstrip('.')
-    return (ingredient, pd.NA, pd.NA)
-
-
-# %%
-df["ингредиент_описание"] = pd.NA
-df["ингредиент_рус"] = pd.NA
-df["ингредиент_лат"] = pd.NA
-
-for row in range(len(df)):
-    raw_value = df.at[row, "сырье"]
-
-    if pd.isna(raw_value) or str(raw_value).strip() in ['', 'nan', 'None']:
-        df.at[row, "ингредиент_описание"] = pd.NA
-        df.at[row, "ингредиент_рус"] = pd.NA
-        df.at[row, "ингредиент_лат"] = pd.NA
-        continue
-
-    string = str(raw_value).strip().lower()
-    ingredients = parse_ingredient_string(string)
-
-    if not ingredients:
-        description, russian, latin = parse_single_ingredient(string)
-        df.at[row, "ингредиент_описание"] = description
-        df.at[row, "ингредиент_рус"] = russian
-        df.at[row, "ингредиент_лат"] = latin
-
-    else:
-        description_list = []
-        russian_list = []
-        latin_list = []
-
-        for ingredient in ingredients:
-            description, russian, latin = parse_single_ingredient(ingredient)
-            if description:
-                description_list.append(description)
-            if pd.notna(russian):
-                russian_list.append(russian)
-            if pd.notna(latin):
-                latin_list.append(latin)
-
-        df.at[row, "ингредиент_описание"] = ", ".join(description_list) if description_list else pd.NA
-        df.at[row, "ингредиент_рус"] = ", ".join(russian_list) if russian_list else pd.NA
-        df.at[row, "ингредиент_лат"] = ", ".join(latin_list) if latin_list else pd.NA
-
-# %% [markdown]
-# Удалим строки, у которых природное происхождение, но отсутствуют данные о сырье
-
-# %%
-indx_for_drop = []
-for i in range(len(df)):
-  if "Синтетическое" not in str(df.at[i, "происхождение_природное_синтетическое"]) and pd.isna(df.at[i, "сырье"]):
-    indx_for_drop.append(i)
-
-df = df.drop(indx_for_drop)
-
-# %%
-print_info(df)
-
-
-# %% [markdown]
-# Функция для извлечения ингредиентов из строки описания
-
-# %%
-def extract_ingredients(description):
-    if pd.isna(description) or description == "":
+def split_ingredients(text):
+    if pd.isna(text):
         return []
+    return [part.strip() for part in str(text).split(',') if part.strip()]
 
-    # Удаляем содержимое в скобках
-    description_clean = re.sub(r'\([^)]*\)', '', str(description)).lower()
+# 1. Получаем списки ингредиентов из столбца 'ингредиент_описание'
+ingredient_lists = df['ингредиент_описание'].apply(split_ingredients)
 
-    # Разделяем по запятым и очищаем от лишних пробелов
-    ingredients = [ing.strip().lower() for ing in description_clean.split(',')]
-
-    # Удаляем пустые строки и строки, содержащие только знаки препинания
-    ingredients = [ing for ing in ingredients if ing and ing.strip()]
-
-    return ingredients
-
-
-# %% [markdown]
-# Удаление дополнительных кавычек и точек
-
-# %%
-def clean_ingredient_name(ingredient):
-    # Удаляем кавычки в начале и конце
-    ingredient = re.sub(r'^["\']|["\']$', '', ingredient)
-    # Удаляем точки в конце
-    ingredient = re.sub(r'\.$', '', ingredient)
-    # Удаляем лишние пробелы
-    ingredient = ingredient.strip()
-    return ingredient
-
-
-# %% [markdown]
-# Извлекаем все ингредиенты из описания
-#
-
-# %%
-df['ингредиенты_список'] = df['ингредиент_описание'].apply(extract_ingredients)
-df['ингредиенты_список'] = df['ингредиенты_список'].apply(
-    lambda x: [clean_ingredient_name(ing) for ing in x if clean_ingredient_name(ing)]
-)
-
-# %%
-all_ingredients = set()
-for ingredient_list in df['ингредиенты_список']:
-  all_ingredients.update(ingredient_list)
-
-all_ingredients = sorted(list(all_ingredients))
-print(f"Всего уникальных значений: {len(all_ingredients)}")
-all_ingredients.remove("\\")
-print("Игредиенты:", all_ingredients[:100])
-
-# %% [markdown]
-# Функция для создания словаря из csv файла
-
-# %%
-import csv
-from io import StringIO
-
-def create_dict_from_csv(csv_content):
-    if isinstance(csv_content, bytes):
-        # Декодируем байты в строку, убирая BOM если есть
-        content = csv_content.decode('utf-8-sig')
-    else:
-        content = str(csv_content)
-
-    corrections = {}
-
-    # Используем csv.reader для корректного парсинга CSV
-    reader = csv.reader(StringIO(content), delimiter=',', quotechar='"')
-
-    for row in reader:
-        if len(row) >= 2:
-            key = row[0].strip()
-            value = row[1].strip()
-
-            # Добавляем только если значение не пустое
-            if value:
-                corrections[key] = value
-    return corrections
-
-
-# %% [markdown]
-# Создание словаря из значений, которые необходимо заменить
-
-# %%
-bads_change_ya = "https://disk.yandex.ru/d/viYfUrU32TVcWQ"
-bads_change = load_from_yandex(bads_change_ya, ',')
-
-# Создаем словарь
-corrections_dict = create_dict_from_csv(bads_change)
-
-# %%
-print(f"Создан словарь с {len(corrections_dict)} записями")
-print("\nПримеры записей (первые 10):")
-for i, (key, value) in enumerate(list(corrections_dict.items())[:5]):
-    print(f"{i+1}. Ключ: {key}")
-    print(f"   Значение: {value}")
-    print()
-
-# %%
-print(corrections_dict)
-
-
-# %%
-def replace_in_list_column(df, col, correction_dict):
-    def replace_in_cell(ingredient_list):
-        if not isinstance(ingredient_list, list):
-            return ingredient_list
-
-        new_list = []
-        for item in ingredient_list:
-            # Проверяем, есть ли замена для этого ингредиента
-            new_item = correction_dict.get(item, item)
-            new_list.append(new_item)
-        return new_list
-
-    df[col] = df[col].apply(replace_in_cell)
-    return df
-
-
-# %%
-replace_in_list_column(df, 'ингредиенты_список', corrections_dict)
-
-# %%
-all_ingredients = set()
-for ingredient_list in df['ингредиенты_список']:
-  all_ingredients.update(ingredient_list)
-
-all_ingredients = sorted(list(all_ingredients))
-print(f"Всего уникальных значений: {len(all_ingredients)}")
-all_ingredients.remove("\\")
-print("Игредиенты:", all_ingredients[:100])
-
-# %% [markdown]
-# Создаем матрицу ингредиентов и корреляций
-
-# %%
-from sklearn.preprocessing import MultiLabelBinarizer
-from sklearn.metrics.pairwise import cosine_similarity
-
+# 2. One-hot матрица ингредиентов
 mlb = MultiLabelBinarizer()
-ingredient_matrix = mlb.fit_transform(df['ингредиенты_список'])
+ingredient_matrix = mlb.fit_transform(ingredient_lists)
 ingredient_df = pd.DataFrame(ingredient_matrix, columns=mlb.classes_)
 
-# Только ингредиенты, встречающиеся >= 10 раз
-frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= 10]
+# 3. Оставляем только часто встречающиеся ингредиенты (>= threshold_for_corr_in_ingredients раз)
+frequent_ingredients = ingredient_df.columns[ingredient_df.sum() >= threshold_for_corr_in_ingredients]
 filtered_df = ingredient_df[frequent_ingredients]
 
-
-# Корреляция и визуализация
+# 4. Матрица "сходства" ингредиентов по косинусной близости
 corr_matrix = pd.DataFrame(
     cosine_similarity(filtered_df.T),
     index=frequent_ingredients,
     columns=frequent_ingredients
 )
 
+# 5. Визуализация
 mask = np.eye(len(corr_matrix), dtype=bool)
 plt.figure(figsize=(14, 12))
 sns.heatmap(
     corr_matrix,
-    cmap='RdBu_r',  # Контрастная палитра
+    cmap='RdBu_r',
     center=0,
-    mask=mask,  # Убираем диагональ
-    vmin=-0.5, vmax=0.5,  # Ограничиваем диапазон для большего контраста
+    mask=mask,
+    vmin=-0.5, vmax=0.5,
     square=True,
     cbar_kws={
         'label': 'Корреляция',
@@ -1167,7 +1168,14 @@ sns.heatmap(
         'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
     }
 )
+plt.title("Косинусное сходство часто встречающихся ингредиентов")
+plt.tight_layout()
+
 print(f"Проанализировано {len(frequent_ingredients)} ингредиентов")
+
+
+# %% [markdown]
+# ## Графы
 
 # %% [markdown]
 # Перейдем к построению графов. Начнём с графов двойной композиции.
@@ -1186,8 +1194,6 @@ print(f"Проанализировано {len(frequent_ingredients)} ингре�
 # Напишем функцию, которая находит ребра и веса этих графов, функцию, которая разбирает строку в список элементов, а также функцию которая убирает значения меньше определенного в словаре
 
 # %%
-from itertools import combinations
-
 def parse_items(cell, sep=",", mapper=None):
     if pd.isna(cell):
         return []
@@ -1249,24 +1255,6 @@ CLASS_MAP = {
     "дуб": "Дубильные вещества",
     "цеолиты": "Цеолиты и гуминовые кислоты",
 }
-
-# %% [markdown]
-# Теперь установим и импортируем нужные библиотеки для построения графов
-
-# %%
-# !pip install pyvis
-# !pip install --upgrade pyvis
-from pyvis.network import Network
-from jinja2 import Environment, FileSystemLoader
-import pyvis
-import os
-import json
-import networkx as nx
-import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
-import matplotlib as mpl
-import math
-import colorsys
 
 
 # %% [markdown]
@@ -1706,52 +1694,96 @@ export_graph_png(pairs_of_components, output_path="static_graph_of_components.pn
     curve_scale=0.25,
     label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
 )
+
 export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight=8, label_min_weight=1, cmap_name="tab20",
     curve_scale=0.25,
     label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
 )
 
 # %% [markdown]
-# Категоризирование столбцов
+# # Кластеризация
+
+# %%
+df_clust = df.copy()
+
+# %%
+print_info(df)
 
 # %% [markdown]
-# Удаление столбцов (Они нам не понадобятся в дальнейшей обработке):
-#
-# *   наименование
-# *   номер_свидетельства_и_дата
-# * этикетка
-# * сырье
-# * рекомендации_по_применению
-# * ингредиент_описание
-# * ингредиент_рус
-# * ингредиент_лат
+# Выберем столбцы, которые не будут использоваться при кластеризации
 
 # %%
 cols_to_drop = [
     "наименование",
+    "изготовитель",
     "номер_свидетельства_и_дата",
     "этикетка",
+    "противопоказания",
     "сырье",
+    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
+    "пищевые_вещества_макро_и_микроэлементы",
+    "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
+    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
+    "минорные_компоненты_растений_фенольные_соединения",
+    "минорные_компоненты_растений_алкалоиды",
+    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
+    "пищевые_вещества_углеводы_и_продукты_их_переработки",
+    "минорные_компоненты_растений_сапонины",
+    "минорные_компоненты_растений_терпеноиды",
+    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
+    "минорные_компоненты_растений_гидроксикоричные_кислоты",
+    "минорные_компоненты_растений_ферменты",
+    "минорные_компоненты_растений_дубильные_вещества",
+    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты",
+    "система_органов_для_беременных_кормящих_и_планирующих_беременность",
+    "система_органов_костно_мышечная_система",
+    "система_органов_нервная_система",
+    "система_органов_иммунная_система",
+    "система_органов_пищеварительный_тракт_и_обмен_веществ",
+    "система_органов_мочеполовая_система",
+    "система_органов_дерматологические_бад",
+    "система_органов_органы_чувств",
+    "система_органов_сердечно_сосудистая_система",
+    "система_органов_противоопухолевые_бад",
+    "система_органов_противопаразитарные_бад",
+    "система_органов_дыхательная_система",
+    "система_органов_кровь_и_система_кроветворения",
+    "система_органов_противомикробные_бад",
+    "группа_населения_предназначен_для_детей",
+    "группа_населения_возраст_детей",
+    "группа_населения_предназначен_для_взрослых",
+    "группа_населения_пол",
+    "группа_населения_пожилые",
     "рекомендации_по_применению",
-    "ингредиент_описание",
-    "ингредиент_рус",
+    "ингредиент_кир",
     "ингредиент_лат"
 ]
-for col in cols_to_drop:
-  df = df.drop(col, axis=1)
 
-# %% [markdown]
-# Категоризируем столбец происхождение_природное_синтетическое
+for col in cols_to_drop:
+    if col in df_clust.columns:
+        df_clust = df_clust.drop(col, axis=1)
+
 
 # %%
-for i in range(len(df)):
-    if "синт" in str(df.iloc[i]["происхождение_природное_синтетическое"]).lower():
-        df.iloc[i, df.columns.get_loc("происхождение_природное_синтетическое")] = 0
-    else:
-        df.iloc[i, df.columns.get_loc("происхождение_природное_синтетическое")] = 1
+print_info(df_clust)
 
 # %% [markdown]
-# Категоризируем признаки
+# Напишем столбцы, которые остались, и что с ними будем делать:
+# - происхождение (уже бинарный)
+# - срок годности (StandardScaler)
+# - год регистрации (StandardScaler)
+# - количество групп компонентов (StandardScaler)
+# - рекомендации по применению (Embedding)
+# - форма выпуска (OHE)
+# - продолжительность приема (StandardScaler)
+# - происхождение природное синтетическое (уже бинарный)
+# - количество единиц на прием (StandardScaler)
+# - количество приемов в день (StandardScaler)
+# - суммарное количество единиц за период (StandardScaler)
+# - ингредиент описание (Embedding)
+# - биологически активные вещества (Embedding / MultiLabelBinarizer)
+# - системы органов (Embedding / MultiLabelBinarizer)
+# - группа населения (Embedding / MultiLabelBinarizer)
 
 # %%
 num_cols = ['срок_годности', 'год_регистрации', 'количество_групп_компонентов',
@@ -1759,21 +1791,15 @@ num_cols = ['срок_годности', 'год_регистрации', 'ко�
             'количество_приемов_в_день', 'суммарное_количество_единиц_за_период']
 
 one_hot_cols = ['форма_выпуска']
-text_cols = ['ингредиенты_список']
-multilabel_cols = ['системы_органы', 'группы_населения', 'биологически_активные_вещества']
-
-# %%
-df[num_cols] = df[num_cols].fillna(df[num_cols].median())
+emb_cols = ['системы_органов', 'группа_населения', 'биологически_активные_вещества', 'рекомендации_по_применению', 'ингредиент_описание']
 
 # %% [markdown]
 # One-Hot Encoding
 
 # %%
-import pandas as pd
-
 df_onehot = pd.get_dummies(df[one_hot_cols], drop_first=True)
 
-df = pd.concat([df, df_onehot], axis=1)
+df_clust = pd.concat([df_clust, df_onehot], axis=1)
 
 # %%
 binary_cols = ['происхождение_природное_синтетическое', 'происхождение', 'форма_выпуска_жидкое, сборы',
@@ -1783,6 +1809,11 @@ binary_cols = ['происхождение_природное_синтетиче
        'форма_выпуска_твердое, сыпучее',
        'форма_выпуска_твердое, сыпучее, полутвердое']
 
+# %%
+df_clust = df_clust.dropna(subset=num_cols).reset_index(drop=True)
+df_clust = df_clust.dropna(subset=binary_cols).reset_index(drop=True)
+
+
 # %% [markdown]
 # Масштабируем числовые признаки
 
@@ -1790,22 +1821,23 @@ binary_cols = ['происхождение_природное_синтетиче
 from sklearn.preprocessing import StandardScaler
 
 scaler = StandardScaler()
-df[num_cols] = scaler.fit_transform(df[num_cols])
+df_clust[num_cols] = scaler.fit_transform(df_clust[num_cols])
 
 # %% [markdown]
 # Преобразуем столбцы системы_органы, группы_населения, биологически_активные_добавки в списки
 
 # %%
-df = df.fillna({'системы_органы':'', 'группы_населения':'', 'биологически_активные_вещества':'', 'ингредиенты_список':''})
+df_clust = df_clust.fillna({'системы_органов':'', 'группа_населения':'', 'биологически_активные_вещества':'', 'ингредиент_описание':''})
 
 def safe_split(s):
   if not isinstance(s, str) or s.strip()=="":
     return []
   return [tok.strip() for tok in s.split(',') if tok.strip()!='']
 
-df['системы_органы_список'] = df['системы_органы'].apply(safe_split)
-df['группы_населения_список'] = df['группы_населения'].apply(safe_split)
-df['биологически_активные_вещества_список'] = df['биологически_активные_вещества'].apply(safe_split)
+df_clust['системы_органов_список'] = df_clust['системы_органов'].apply(safe_split)
+df_clust['группа_населения_список'] = df_clust['группа_населения'].apply(safe_split)
+df_clust['биологически_активные_вещества_список'] = df_clust['биологически_активные_вещества'].apply(safe_split)
+df_clust['ингредиент_описание'] = df_clust['ингредиент_описание'].apply(safe_split)
 
 # %% [markdown]
 # Создаем словарь токенов для каждого столбца с большим количество уникальных элементов
@@ -1814,24 +1846,24 @@ df['биологически_активные_вещества_список'] = 
 from itertools import chain
 
 def build_vocab(column):
-  tokens = set(chain.from_iterable(df[column]))
+  tokens = set(chain.from_iterable(df_clust[column]))
   tokens.discard('')
   tokens = sorted([t for t in tokens if t is not None])
   return {t:i for i,t in enumerate(tokens)}
 
-vocab_organs = build_vocab('системы_органы_список')
-vocab_groups = build_vocab('группы_населения_список')
+vocab_organs = build_vocab('системы_органов_список')
+vocab_groups = build_vocab('группа_населения_список')
 vocab_bio = build_vocab('биологически_активные_вещества_список')
-vocab_ingredients = build_vocab('ингредиенты_список')
+vocab_ingredients = build_vocab('ингредиент_описание')
 
 # %% [markdown]
 # Превращаем каждый список категорий в список индексов
 
 # %%
-df['organs_ids'] = df['системы_органы_список'].apply(lambda lst: [vocab_organs[x] for x in lst])
-df['groups_ids'] = df['группы_населения_список'].apply(lambda lst: [vocab_groups[x] for x in lst])
-df['bio_ids'] = df['биологически_активные_вещества_список'].apply(lambda lst: [vocab_bio[x] for x in lst])
-df['ingredients_ids'] = df['ингредиенты_список'].apply(lambda lst: [vocab_ingredients[x] for x in lst])
+df_clust['organs_ids'] = df_clust['системы_органов_список'].apply(lambda lst: [vocab_organs[x] for x in lst])
+df_clust['groups_ids'] = df_clust['группа_населения_список'].apply(lambda lst: [vocab_groups[x] for x in lst])
+df_clust['bio_ids'] = df_clust['биологически_активные_вещества_список'].apply(lambda lst: [vocab_bio[x] for x in lst])
+df_clust['ingredients_ids'] = df_clust['ингредиент_описание'].apply(lambda lst: [vocab_ingredients[x] for x in lst])
 
 
 # %% [markdown]
@@ -1848,19 +1880,29 @@ emb_grp = nn.Embedding(len(vocab_groups), embedding_dim)
 emb_bio = nn.Embedding(len(vocab_bio), embedding_dim)
 emb_ing = nn.Embedding(len(vocab_ingredients), embedding_dim)
 
-def embed_mean(id_list, emb_layer):
+def embed_mean(id_list, emb):
+  if len(id_list) == 0:
+    return np.zeros(emb.embedding_dim)
+
   ids = torch.tensor(id_list, dtype=torch.long)
-  return emb_layer(ids).mean(dim=0) # усредняем
+  vec = emb(ids).mean(dim=0)
+  return vec.detach().numpy()
 
 
 # %% [markdown]
 # Финальные вектора признаков
 
 # %%
-df['org_vec'] = df['organs_ids'].apply(lambda x: embed_mean(x, emb_org).detach().numpy())
-df['grp_vec'] = df['groups_ids'].apply(lambda x: embed_mean(x, emb_grp).detach().numpy())
-df['bio_vec'] = df['bio_ids'].apply(lambda x: embed_mean(x, emb_bio).detach().numpy())
-df['ing_vec'] = df['ingredients_ids'].apply(lambda x: embed_mean(x, emb_ing).detach().numpy())
+df_clust['org_vec'] = df_clust['organs_ids'].apply(lambda x: embed_mean(x, emb_org)) # много nan значений
+df_clust['grp_vec'] = df_clust['groups_ids'].apply(lambda x: embed_mean(x, emb_grp)) # аналогично
+df_clust['bio_vec'] = df_clust['bio_ids'].apply(lambda x: embed_mean(x, emb_bio)) # есть nan
+df_clust['ing_vec'] = df_clust['ingredients_ids'].apply(lambda x: embed_mean(x, emb_ing)) # есть nan
+
+# %%
+print(len(df_clust['org_vec'].iloc[0]))
+print(len(df_clust['grp_vec'].iloc[0]))
+print(len(df_clust['bio_vec'].iloc[0]))
+print(len(df_clust['ing_vec'].iloc[0]))
 
 # %% [markdown]
 # Объединяем все в общий вектор признаков
@@ -1875,28 +1917,24 @@ features_vectors = np.stack([
         row[num_cols].values,
         row[binary_cols].values
     ])
-    for _, row in df.iterrows()
+    for _, row in df_clust.iterrows()
 ])
 
+
+# %%
+df_clust.isna().sum()
 
 # %% [markdown]
 # Иерархическая кластеризация
 
 # %%
-from sklearn.impute import SimpleImputer
-
-# Заполняем NaN средними значениями по каждому признаку
-imputer = SimpleImputer(strategy='mean')
-features_clean = imputer.fit_transform(features_vectors)
-
-# %%
-print(f"Тип features_vectors: {type(features_clean)}")
-print(f"Форма features_vectors: {features_clean.shape if hasattr(features_clean, 'shape') else 'Нет формы'}")
+print(f"Тип features_vectors: {type(features_vectors)}")
+print(f"Форма features_vectors: {features_vectors.shape if hasattr(features_vectors, 'shape') else 'Нет формы'}")
 
 # Посмотрим на первые несколько элементов
 print("Первые 3 элемента:")
-for i in range(min(3, len(features_clean))):
-    print(f"Элемент {i}: тип = {type(features_clean[i])}, значение = {features_clean[i][:50] if hasattr(features_clean[i], '__len__') else features_vectors[i]}")
+for i in range(min(3, len(features_vectors))):
+    print(f"Элемент {i}: тип = {type(features_vectors[i])}, значение = {features_vectors[i][:50] if hasattr(features_vectors[i], '__len__') else features_vectors[i]}")
 
 # %%
 from sklearn.cluster import AgglomerativeClustering
@@ -1904,32 +1942,34 @@ import matplotlib.pyplot as plt
 import umap.umap_ as umap
 
 agg = AgglomerativeClustering(n_clusters=5, linkage='ward')
-df['cluster'] = agg.fit_predict(features_clean)
+df_clust['cluster'] = agg.fit_predict(features_vectors)
 
-reducer = umap.UMAP(n_neighbors=15, min_dist=0.1, metric='cosine', random_state=42)
-coords = reducer.fit_transform(features_clean)
 
+
+# %%
 plt.figure(figsize=(10,7))
-plt.scatter(coords[:,0], coords[:,1], c=df['cluster'], s=30, alpha=0.8)
-plt.colorbar(label="Cluster")
-plt.title("Кластеры БАДов в 2D проекции UMAP")
+
+colors = plt.cm.tab10(np.linspace(0,1,5))
+
+for cluster_id in range(5):
+  mask = df_clust['cluster'] == cluster_id
+  plt.scatter(coords[mask,0], coords[mask, 1],
+              s=30, alpha=0.8, color=colors[cluster_id],
+              label=f'Cluster {cluster_id}')
+
+plt.legend(title='Clusters')
+plt.title("Кластеры Бадов")
+plt.xlabel("UMAP-1")
+plt.ylabel("UMAP-2")
 plt.show()
-
-
-
 
 # %% [markdown]
 # # Сохранение изменений
 
 # %%
-import os, sys
-import pathlib
-from pathlib import Path
-
 try:
     _system = get_ipython().system
 except NameError:
-    import subprocess
     def _system(cmd):
         return subprocess.check_call(cmd, shell=True)
 
