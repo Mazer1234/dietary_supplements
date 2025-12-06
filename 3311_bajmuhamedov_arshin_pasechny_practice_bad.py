@@ -157,6 +157,8 @@ def print_info(df):
 # Функция преобразовангия CSV в словарь
 
 # %%
+
+# %%
 def csv_to_dict(csv_content, sep=',', key_index=0, value_index=1):
     if isinstance(csv_content, bytes):
         text = csv_content.decode('utf-8-sig')
@@ -1783,6 +1785,184 @@ print_info(df_clust)
 # - системы органов (Embedding / MultiLabelBinarizer)
 # - группа населения (Embedding / MultiLabelBinarizer)
 
+# %%
+num_cols = ['срок_годности', 'год_регистрации', 'количество_групп_компонентов',
+            'продолжительность_приема', 'количество_единиц_на_прием',
+            'количество_приемов_в_день', 'суммарное_количество_единиц_за_период']
+
+one_hot_cols = ['форма_выпуска']
+emb_cols = ['системы_органов', 'группа_населения', 'биологически_активные_вещества', 'рекомендации_по_применению', 'ингредиент_описание']
+
+# %% [markdown]
+# One-Hot Encoding
+
+# %%
+df_onehot = pd.get_dummies(df[one_hot_cols], drop_first=True)
+
+df_clust = pd.concat([df_clust, df_onehot], axis=1)
+
+# %%
+binary_cols = ['происхождение_природное_синтетическое', 'происхождение', 'форма_выпуска_жидкое, сборы',
+       'форма_выпуска_полутвердое', 'форма_выпуска_сборы',
+       'форма_выпуска_сыпучее', 'форма_выпуска_твердое',
+       'форма_выпуска_твердое, жидкое', 'форма_выпуска_твердое, сборы',
+       'форма_выпуска_твердое, сыпучее',
+       'форма_выпуска_твердое, сыпучее, полутвердое']
+
+# %%
+df_clust = df_clust.dropna(subset=num_cols).reset_index(drop=True)
+df_clust = df_clust.dropna(subset=binary_cols).reset_index(drop=True)
+
+
+# %% [markdown]
+# Масштабируем числовые признаки
+
+# %%
+from sklearn.preprocessing import StandardScaler
+
+scaler = StandardScaler()
+df_clust[num_cols] = scaler.fit_transform(df_clust[num_cols])
+
+# %% [markdown]
+# Преобразуем столбцы системы_органы, группы_населения, биологически_активные_добавки в списки
+
+# %%
+df_clust = df_clust.fillna({'системы_органов':'', 'группа_населения':'', 'биологически_активные_вещества':'', 'ингредиент_описание':''})
+
+def safe_split(s):
+  if not isinstance(s, str) or s.strip()=="":
+    return []
+  return [tok.strip() for tok in s.split(',') if tok.strip()!='']
+
+df_clust['системы_органов_список'] = df_clust['системы_органов'].apply(safe_split)
+df_clust['группа_населения_список'] = df_clust['группа_населения'].apply(safe_split)
+df_clust['биологически_активные_вещества_список'] = df_clust['биологически_активные_вещества'].apply(safe_split)
+df_clust['ингредиент_описание'] = df_clust['ингредиент_описание'].apply(safe_split)
+
+# %% [markdown]
+# Создаем словарь токенов для каждого столбца с большим количество уникальных элементов
+
+# %%
+from itertools import chain
+
+def build_vocab(column):
+  tokens = set(chain.from_iterable(df_clust[column]))
+  tokens.discard('')
+  tokens = sorted([t for t in tokens if t is not None])
+  return {t:i for i,t in enumerate(tokens)}
+
+vocab_organs = build_vocab('системы_органов_список')
+vocab_groups = build_vocab('группа_населения_список')
+vocab_bio = build_vocab('биологически_активные_вещества_список')
+vocab_ingredients = build_vocab('ингредиент_описание')
+
+# %% [markdown]
+# Превращаем каждый список категорий в список индексов
+
+# %%
+df_clust['organs_ids'] = df_clust['системы_органов_список'].apply(lambda lst: [vocab_organs[x] for x in lst])
+df_clust['groups_ids'] = df_clust['группа_населения_список'].apply(lambda lst: [vocab_groups[x] for x in lst])
+df_clust['bio_ids'] = df_clust['биологически_активные_вещества_список'].apply(lambda lst: [vocab_bio[x] for x in lst])
+df_clust['ingredients_ids'] = df_clust['ингредиент_описание'].apply(lambda lst: [vocab_ingredients[x] for x in lst])
+
+
+# %% [markdown]
+# Embedding слой
+
+# %%
+import torch
+import torch.nn as nn
+
+embedding_dim = 32
+
+emb_org = nn.Embedding(len(vocab_organs), embedding_dim)
+emb_grp = nn.Embedding(len(vocab_groups), embedding_dim)
+emb_bio = nn.Embedding(len(vocab_bio), embedding_dim)
+emb_ing = nn.Embedding(len(vocab_ingredients), embedding_dim)
+
+def embed_mean(id_list, emb):
+  if len(id_list) == 0:
+    return np.zeros(emb.embedding_dim)
+
+  ids = torch.tensor(id_list, dtype=torch.long)
+  vec = emb(ids).mean(dim=0)
+  return vec.detach().numpy()
+
+
+# %% [markdown]
+# Финальные вектора признаков
+
+# %%
+df_clust['org_vec'] = df_clust['organs_ids'].apply(lambda x: embed_mean(x, emb_org)) # много nan значений
+df_clust['grp_vec'] = df_clust['groups_ids'].apply(lambda x: embed_mean(x, emb_grp)) # аналогично
+df_clust['bio_vec'] = df_clust['bio_ids'].apply(lambda x: embed_mean(x, emb_bio)) # есть nan
+df_clust['ing_vec'] = df_clust['ingredients_ids'].apply(lambda x: embed_mean(x, emb_ing)) # есть nan
+
+# %%
+print(len(df_clust['org_vec'].iloc[0]))
+print(len(df_clust['grp_vec'].iloc[0]))
+print(len(df_clust['bio_vec'].iloc[0]))
+print(len(df_clust['ing_vec'].iloc[0]))
+
+# %% [markdown]
+# Объединяем все в общий вектор признаков
+
+# %%
+features_vectors = np.stack([
+    np.concatenate([
+        row['org_vec'],
+        row['grp_vec'],
+        row['bio_vec'],
+        row['ing_vec'],
+        row[num_cols].values,
+        row[binary_cols].values
+    ])
+    for _, row in df_clust.iterrows()
+])
+
+
+# %%
+df_clust.isna().sum()
+
+# %% [markdown]
+# Иерархическая кластеризация
+
+# %%
+print(f"Тип features_vectors: {type(features_vectors)}")
+print(f"Форма features_vectors: {features_vectors.shape if hasattr(features_vectors, 'shape') else 'Нет формы'}")
+
+# Посмотрим на первые несколько элементов
+print("Первые 3 элемента:")
+for i in range(min(3, len(features_vectors))):
+    print(f"Элемент {i}: тип = {type(features_vectors[i])}, значение = {features_vectors[i][:50] if hasattr(features_vectors[i], '__len__') else features_vectors[i]}")
+
+# %%
+from sklearn.cluster import AgglomerativeClustering
+import matplotlib.pyplot as plt
+import umap.umap_ as umap
+
+agg = AgglomerativeClustering(n_clusters=5, linkage='ward')
+df_clust['cluster'] = agg.fit_predict(features_vectors)
+
+
+
+# %%
+plt.figure(figsize=(10,7))
+
+colors = plt.cm.tab10(np.linspace(0,1,5))
+
+for cluster_id in range(5):
+  mask = df_clust['cluster'] == cluster_id
+  plt.scatter(coords[mask,0], coords[mask, 1],
+              s=30, alpha=0.8, color=colors[cluster_id],
+              label=f'Cluster {cluster_id}')
+
+plt.legend(title='Clusters')
+plt.title("Кластеры Бадов")
+plt.xlabel("UMAP-1")
+plt.ylabel("UMAP-2")
+plt.show()
+
 # %% [markdown]
 # # Сохранение изменений
 
@@ -1846,3 +2026,5 @@ if IN_COLAB:
 
 else:
     pass
+
+# %%
