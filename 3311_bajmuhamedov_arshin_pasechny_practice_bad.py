@@ -943,26 +943,41 @@ correlation_spearman = numeric_df.corr(method='spearman') # unlinear data
 # Heatmap на основе корреляции
 
 # %%
+mask = np.eye(len(correlation_pearson), dtype=bool)
+
 # Heatmap Пирсон
 plt.figure(figsize=(16, 14))
 sns.heatmap(correlation_pearson,
             annot=False,
-            cmap='coolwarm',
+            mask=mask,
+            cmap='RdBu_r',
             center=0,
-            fmt='.2f',
-            linewidths=0.5)
+            vmin=-0.5, vmax=0.5,
+            square=True,
+            cbar_kws={
+                'label': 'Корреляция',
+                'shrink': 0.8,
+                'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
+            })
 plt.title('Корреляция Пирсона (линейная)')
 plt.tight_layout()
 plt.show()
+mask = np.eye(len(correlation_spearman), dtype=bool)
 
 # Heatmap Спирман
 plt.figure(figsize=(16, 14))
 sns.heatmap(correlation_spearman,
             annot=False,
-            cmap='coolwarm',
+            mask=mask,
+            cmap='RdBu_r',
             center=0,
-            fmt='.2f',
-            linewidths=0.5)
+            vmin=-0.5, vmax=0.5,
+            square=True,
+            cbar_kws={
+                'label': 'Корреляция',
+                'shrink': 0.8,
+                'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
+            })
 plt.title('Корреляция Спирмана (ранговая)')
 plt.tight_layout()
 plt.show()
@@ -1126,7 +1141,7 @@ if significant_pairs:
 # Построим матрицу корреляций для ингредиентов, встречающихся больше заданного значения раз
 
 # %%
-threshold_for_corr_in_ingredients = 0.2
+threshold_for_corr_in_ingredients = 20
 
 def split_ingredients(text):
     if pd.isna(text):
