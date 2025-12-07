@@ -30,6 +30,7 @@
 # %%
 # Установка внешних библиотек
 # !pip install --upgrade pyvis
+# !pip install -U sentence-transformers
 
 # Стандартная библиотека Python
 import csv
@@ -57,12 +58,23 @@ from matplotlib.collections import LineCollection
 import seaborn as sns
 from scipy.stats import pearsonr
 import networkx as nx
+from scipy.sparse import issparse, hstack as sparse_hstack
+from sentence_transformers import SentenceTransformer
+from sklearn.decomposition import PCA
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.neighbors import NearestNeighbors
+from scipy.cluster.hierarchy import dendrogram, linkage
 from sklearn.metrics.pairwise import cosine_similarity
 import pyvis
 from pyvis.network import Network
 from jinja2 import Environment, FileSystemLoader
 from tabulate import tabulate
+
 
 # %% [markdown]
 # Настроим pandas
@@ -383,8 +395,7 @@ pairs = [
     ["форма_выпуска", ["раствор, сбор"], "жидкое, сборы"],
 
     # Преобразуем некоторые столбцы для последующей бинаризации
-    ["происхождение", ["иностранное"], pd.NA],
-    ["происхождение_природное_синтетическое", ["Синтетическое"], pd.NA],
+    ["происхождение", ["иностранное"], pd.NA]
 ]
 
 for i in range(len(pairs)):
@@ -714,12 +725,17 @@ for row in range(len(df)):
 # Удалим строки, у которых природное происхождение, но отсутствуют данные о сырье
 
 # %%
-indx_for_drop = []
-for i in range(len(df)):
-  if "Синтетическое" not in str(df.at[i, "происхождение_природное_синтетическое"]) and pd.isna(df.at[i, "сырье"]):
-    indx_for_drop.append(i)
+col_origin = "происхождение_природное_синтетическое"
+col_raw    = "сырье"
 
-df = df.drop(indx_for_drop)
+mask_raw_na = df["сырье"].isna()
+mask_synth = df["происхождение_природное_синтетическое"].astype("string").str.contains("синтетическое", case=False, na=False)
+mask_to_drop = mask_raw_na & (~mask_synth)
+
+maxi = int(mask_to_drop.sum())
+print("Строк для удаления:", maxi)
+
+df = df.drop(df.index[mask_to_drop])
 
 
 # %% [markdown]
@@ -833,6 +849,14 @@ def count_items(text, sep=','):
 
 df['количество_групп_компонентов'] = df['биологически_активные_вещества'].apply(count_items)
 
+# %% [markdown]
+# Преобразуем нестандартный бинарный столбец
+
+# %%
+mask = df["происхождение_природное_синтетическое"].astype("string").str.contains("Синтетическое", na=False)
+
+df.loc[mask, "происхождение_природное_синтетическое"] = pd.NA
+
 
 # %% [markdown]
 # Преобразуем столбцы, которые возможно к бинарному виду и для этого напишем функцию, которая переводит по следующему правилу:
@@ -852,7 +876,7 @@ def to_binary(value):
 
 
 # %% [markdown]
-# Перечислим столбцы, требующей бинаризации
+# Перечислим столбцы, требующей стандартной бинаризации
 
 # %%
 binary_columns = [
@@ -892,13 +916,15 @@ binary_columns = [
     "группа_населения_пожилые",
 ]
 
-
 # %% [markdown]
 # Применим ко всем этим столбцам
 
 # %%
 for col in binary_columns:
     df[col] = df[col].apply(to_binary).astype("Int8")
+
+# %%
+df.head(10)
 
 # %% [markdown]
 # Теперь изменим тип столбцов
@@ -916,10 +942,8 @@ for col in num_cols:
 df["суммарное_количество_единиц_за_период"] = (df["продолжительность_приема"] * df["количество_единиц_на_прием"] * df["количество_приемов_в_день"] * 30).astype("Int64")
 
 df["срок_годности"] = df["срок_годности"].astype("Float64")
+df["группа_населения_возраст_детей"] = df["группа_населения_возраст_детей"].astype("Float64")
 
-
-# %%
-print_info(df)
 
 # %% [markdown]
 # # Визуализицаия (Матрицы корреляций и графы)
@@ -941,26 +965,41 @@ correlation_spearman = numeric_df.corr(method='spearman') # unlinear data
 # Heatmap на основе корреляции
 
 # %%
+mask = np.eye(len(correlation_pearson), dtype=bool)
+
 # Heatmap Пирсон
 plt.figure(figsize=(16, 14))
 sns.heatmap(correlation_pearson,
             annot=False,
-            cmap='coolwarm',
+            mask=mask,
+            cmap='RdBu_r',
             center=0,
-            fmt='.2f',
-            linewidths=0.5)
+            vmin=-0.5, vmax=0.5,
+            square=True,
+            cbar_kws={
+                'label': 'Корреляция',
+                'shrink': 0.8,
+                'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
+            })
 plt.title('Корреляция Пирсона (линейная)')
 plt.tight_layout()
 plt.show()
+mask = np.eye(len(correlation_spearman), dtype=bool)
 
 # Heatmap Спирман
 plt.figure(figsize=(16, 14))
 sns.heatmap(correlation_spearman,
             annot=False,
-            cmap='coolwarm',
+            mask=mask,
+            cmap='RdBu_r',
             center=0,
-            fmt='.2f',
-            linewidths=0.5)
+            vmin=-0.5, vmax=0.5,
+            square=True,
+            cbar_kws={
+                'label': 'Корреляция',
+                'shrink': 0.8,
+                'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
+            })
 plt.title('Корреляция Спирмана (ранговая)')
 plt.tight_layout()
 plt.show()
@@ -989,7 +1028,8 @@ significant_pairs = sorted(strong_pairs, key=lambda x: abs(x['correlation']), re
 
 # Определяем бессмысленные пары как наборы
 meaningless_sets = [
-    {'группа_населения_возраст_детей', 'группа_населения_предназначен_для_взрослых'}
+    {'группа_населения_возраст_детей', 'группа_населения_предназначен_для_взрослых'},
+    {'количество_единиц_на_прием', 'суммарное_количество_единиц_за_период'}
 ]
 
 # Фильтруем пары
@@ -1124,7 +1164,7 @@ if significant_pairs:
 # Построим матрицу корреляций для ингредиентов, встречающихся больше заданного значения раз
 
 # %%
-threshold_for_corr_in_ingredients = 0.2
+threshold_for_corr_in_ingredients = 20
 
 def split_ingredients(text):
     if pd.isna(text):
@@ -1704,9 +1744,6 @@ export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight
 # %%
 df_clust = df.copy()
 
-# %%
-print_info(df)
-
 # %% [markdown]
 # Выберем столбцы, которые не будут использоваться при кластеризации
 
@@ -1715,55 +1752,23 @@ cols_to_drop = [
     "наименование",
     "изготовитель",
     "номер_свидетельства_и_дата",
+    "рекомендации_по_применению",
     "этикетка",
     "противопоказания",
     "сырье",
-    "пищевые_вещества_витамины_витаминоподобные_вещества_и_коферменты",
-    "пищевые_вещества_макро_и_микроэлементы",
-    "пищевые_вещества_жиры_жироподобные_вещества_и_их_производные",
-    "пищевые_вещества_белки_пептиды_аминокислоты_нуклеиновые_кислоты",
-    "минорные_компоненты_растений_фенольные_соединения",
-    "минорные_компоненты_растений_алкалоиды",
-    "пробиотики_в_монокультурах_и_ассоциациях_пробиотические_микроорганизмы",
-    "пищевые_вещества_углеводы_и_продукты_их_переработки",
-    "минорные_компоненты_растений_сапонины",
-    "минорные_компоненты_растений_терпеноиды",
-    "минорные_компоненты_растений_естественные_метаболиты_и_стимуляторы_метаболизма",
-    "минорные_компоненты_растений_гидроксикоричные_кислоты",
-    "минорные_компоненты_растений_ферменты",
-    "минорные_компоненты_растений_дубильные_вещества",
-    "минеральные_и_минерало_органические_природные_субстанции_цеолиты_и_гуминовые_кислоты",
-    "система_органов_для_беременных_кормящих_и_планирующих_беременность",
-    "система_органов_костно_мышечная_система",
-    "система_органов_нервная_система",
-    "система_органов_иммунная_система",
-    "система_органов_пищеварительный_тракт_и_обмен_веществ",
-    "система_органов_мочеполовая_система",
-    "система_органов_дерматологические_бад",
-    "система_органов_органы_чувств",
-    "система_органов_сердечно_сосудистая_система",
-    "система_органов_противоопухолевые_бад",
-    "система_органов_противопаразитарные_бад",
-    "система_органов_дыхательная_система",
-    "система_органов_кровь_и_система_кроветворения",
-    "система_органов_противомикробные_бад",
-    "группа_населения_предназначен_для_детей",
-    "группа_населения_возраст_детей",
-    "группа_населения_предназначен_для_взрослых",
-    "группа_населения_пол",
-    "группа_населения_пожилые",
-    "рекомендации_по_применению",
+    "биологически_активные_вещества",
+    "системы_органов",
+    "группа_населения",
     "ингредиент_кир",
-    "ингредиент_лат"
+    "ингредиент_лат",
+    "группа_населения_пол",
+    "группа_населения_возраст_детей"
 ]
 
 for col in cols_to_drop:
     if col in df_clust.columns:
         df_clust = df_clust.drop(col, axis=1)
 
-
-# %%
-print_info(df_clust)
 
 # %% [markdown]
 # Напишем столбцы, которые остались, и что с ними будем делать:
@@ -1779,9 +1784,533 @@ print_info(df_clust)
 # - количество приемов в день (StandardScaler)
 # - суммарное количество единиц за период (StandardScaler)
 # - ингредиент описание (Embedding)
-# - биологически активные вещества (Embedding / MultiLabelBinarizer)
-# - системы органов (Embedding / MultiLabelBinarizer)
-# - группа населения (Embedding / MultiLabelBinarizer)
+# - биологически-активные вещества (много бинарных столбцов)
+# - система органов (много бинарных столбцов)
+# - группа населения (бинарные и числовые столбцы)
+
+# %% [markdown]
+# Заполним пустые числовые столбцы медианой, а текстовые пустыми строками
+
+# %%
+num_with_na = [
+    "продолжительность_приема",
+    "количество_единиц_на_прием",
+    "суммарное_количество_единиц_за_период",
+]
+
+for col in num_with_na:
+    df_clust[col] = df_clust[col].fillna(df_clust[col].median())
+
+df_clust["ингредиент_описание"] = df_clust["ингредиент_описание"].fillna("")
+
+# %% [markdown]
+# Напишем ColumnTransformer
+
+# %%
+numeric_cols = [
+    "срок_годности",
+    "год_регистрации",
+    "количество_групп_компонентов",
+    "продолжительность_приема",
+    "количество_единиц_на_прием",
+    "количество_приемов_в_день",
+    "суммарное_количество_единиц_за_период",
+]
+
+cat_cols = ["форма_выпуска"]
+
+preprocess_struct = ColumnTransformer(
+    transformers=[
+        ("num", StandardScaler(), numeric_cols),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+    ],
+    remainder="drop"
+)
+
+X_struct = preprocess_struct.fit_transform(df_clust)
+
+# Имена новых признаков после преобразований
+feature_names_struct = preprocess_struct.get_feature_names_out()
+
+# %% [markdown]
+# Добавим эмбеддинги
+
+# %%
+model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+model = SentenceTransformer(model_name)
+
+# %%
+texts_ing = df_clust["ингредиент_описание"].astype(str).tolist()
+
+# %%
+emb_ing = model.encode(texts_ing, show_progress_bar=True, batch_size=64, convert_to_numpy=True)
+
+print("emb_ing shape:", emb_ing.shape)  # (n_samples, d1)
+
+scaler_emb = StandardScaler()
+emb_ing = scaler_emb.fit_transform(emb_ing)
+
+# Имена признаков для эмбеддингов
+emb_ing_names = [f"emb_ing_{i}" for i in range(emb_ing.shape[1])]
+emb_feature_names = emb_ing_names
+
+# %%
+if issparse(X_struct):
+    X_full = sparse_hstack([X_struct, emb_ing])
+else:
+    X_full = np.hstack([X_struct, emb_ing])
+
+# Для удобства переведём в плотный массив и сделаем DataFrame
+if issparse(X_full):
+    X_full_dense = X_full.toarray()
+else:
+    X_full_dense = X_full
+
+all_feature_names = list(feature_names_struct) + emb_feature_names
+
+df_features = pd.DataFrame(
+    X_full_dense,
+    index=df_clust.index,
+    columns=all_feature_names
+)
+
+print("Итоговая матрица признаков X_full:", X_full_dense.shape)
+print("Всего признаков:", len(all_feature_names))
+
+X = df_features.values
+
+
+# %% [markdown]
+# Напишем функцию, которая будет сравнивать кластеры по всем столбцам в рамках одной кластеризации
+
+# %%
+def print_cluster_summary(df, cluster_col, details=0, bin_threshold=0.1):
+    if cluster_col not in df.columns:
+        raise ValueError(f"Столбец '{cluster_col}' не найден в df")
+
+    cluster_counts = df[cluster_col].value_counts().sort_index()
+    print("=== РАЗМЕРЫ КЛАСТЕРОВ ===")
+    print(cluster_counts.to_string())
+    print(f"Всего объектов: {len(df)}\n")
+
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    num_cols = [c for c in num_cols if c != cluster_col]
+
+    if num_cols:
+        num_means = (
+            df.groupby(cluster_col)[num_cols]
+              .mean()
+              .T  # строки = признаки, столбцы = кластеры
+        )
+
+        if details == 0:
+            # кандидаты в бинарные: только 0/1 (игнорируя NaN)
+            binary_candidates = []
+            for c in num_cols:
+                vals = df[c].dropna().unique()
+                if len(vals) <= 2 and set(vals).issubset({0, 1}):
+                    binary_candidates.append(c)
+
+            low_diff_bins = []
+            for c in binary_candidates:
+                vals = num_means.loc[c].values
+                if vals.max() - vals.min() < bin_threshold:
+                    low_diff_bins.append(c)
+
+            cols_to_show = [c for c in num_cols if c not in low_diff_bins]
+
+            print("=== ЧИСЛОВЫЕ ПРИЗНАКИ (средние по кластерам) ===")
+            print(
+                f"(Порог для бинарных признаков: {bin_threshold:.2f}. "
+                f"Скрыто {len(low_diff_bins)} малоконтрастных бинарных столбцов.)"
+            )
+
+            if cols_to_show:
+                print(
+                    num_means.loc[cols_to_show]
+                    .round(3)
+                    .to_string(float_format=lambda x: f"{x:.3f}")
+                )
+            else:
+                print("Все числовые признаки отфильтрованы по заданному порогу.")
+        else:
+            # details = 1 -> показываем всё как есть
+            print("=== ЧИСЛОВЫЕ ПРИЗНАКИ (средние по кластерам, без фильтрации) ===")
+            print(
+                num_means
+                .round(3)
+                .to_string(float_format=lambda x: f"{x:.3f}")
+            )
+    else:
+        print("Числовых признаков, кроме столбца кластера, не найдено.")
+
+    cat_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    if cluster_col in cat_cols:
+        cat_cols.remove(cluster_col)
+
+    if not cat_cols:
+        print("\nКатегориальных/строковых признаков не найдено.")
+        return
+
+    print("\n=== КАТЕГОРИАЛЬНЫЕ / СТРОКОВЫЕ ПРИЗНАКИ (доля объектов с категорией в кластере) ===")
+    print("count = сколько объектов в кластере имеют эту базовую категорию.")
+    print("share = count / размер кластера * 100, в %.\n")
+    print("Если в ячейке несколько категорий через запятую — объект учитывается в каждой из них.\n")
+
+    MAX_UNIQUE_FULL = 15   # до скольких базовых категорий показываем всё
+    TOP_N_LARGE     = 5    # если базовых категорий больше — только TOP-N на кластер + '<прочие>'
+
+    for col in cat_cols:
+        # строим счётчики по базовым токенам (разбиваем по ',')
+        cluster_token_counts = {cl: {} for cl in cluster_counts.index}
+        all_tokens = set()
+
+        for cl, val in df[[cluster_col, col]].itertuples(index=False, name=None):
+            if pd.isna(val) or str(val).strip() == "":
+                tokens = ["<нет значения>"]
+            else:
+                tokens = [p.strip() for p in str(val).split(",") if p.strip()]
+
+            for tok in tokens:
+                all_tokens.add(tok)
+                d = cluster_token_counts.setdefault(cl, {})
+                d[tok] = d.get(tok, 0) + 1
+
+        n_tokens = len(all_tokens)
+        print(f"\n--- Столбец: {col} --- (базовых категорий после разбиения: {n_tokens})")
+
+        # маленькое число базовых категорий -> показываем всё
+        if n_tokens <= MAX_UNIQUE_FULL:
+            for cl in sorted(cluster_counts.index):
+                counts_dict = cluster_token_counts.get(cl, {})
+                rows = []
+                for tok, cnt in counts_dict.items():
+                    share = cnt / cluster_counts[cl] * 100
+                    rows.append((tok, int(cnt), share))
+
+                if not rows:
+                    print(f"\nКластер {cl} (n={cluster_counts[cl]}): нет значений")
+                    continue
+
+                df_tok = (
+                    pd.DataFrame(rows, columns=[col, "count", "share"])
+                    .sort_values("share", ascending=False)
+                )
+                df_tok["share"] = df_tok["share"].round(3)
+
+                print(f"\nКластер {cl} (n={cluster_counts[cl]}):")
+                print(df_tok.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+
+        # много базовых категорий -> TOP-N + '<прочие>'
+        else:
+            print(f"Слишком много категорий (n={n_tokens}), показываю TOP-{TOP_N_LARGE} для каждого кластера + '<прочие>'.")
+            for cl in sorted(cluster_counts.index):
+                counts_dict = cluster_token_counts.get(cl, {})
+                rows = []
+                for tok, cnt in counts_dict.items():
+                    share = cnt / cluster_counts[cl] * 100
+                    rows.append((tok, int(cnt), share))
+
+                if not rows:
+                    print(f"\nКластер {cl} (n={cluster_counts[cl]}): нет значений")
+                    continue
+
+                df_tok = (
+                    pd.DataFrame(rows, columns=[col, "count", "share"])
+                    .sort_values("share", ascending=False)
+                )
+
+                top = df_tok.head(TOP_N_LARGE).copy()
+                other_share = df_tok["share"].iloc[TOP_N_LARGE:].sum()
+
+                if other_share > 0:
+                    top = pd.concat(
+                        [
+                            top,
+                            pd.DataFrame({
+                                col: ["<прочие>"],
+                                "count": [df_tok["count"].iloc[TOP_N_LARGE:].sum()],
+                                "share": [other_share],
+                            })
+                        ],
+                        ignore_index=True
+                    )
+
+                top["share"] = top["share"].round(3)
+
+                print(f"\nКластер {cl} (n={cluster_counts[cl]}):")
+                print(top.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
+
+
+# %% [markdown]
+# ## K-Means
+
+# %%
+df_clust_kmeans = df_clust.copy()
+
+# %% [markdown]
+# Рассмотрим разбиения на не более чем 5 кластеров
+
+# %%
+k_means_values = [2, 3, 4, 5] # какое количество кластеров рассматриваем
+results = []
+labels_dict = {}
+
+for k in k_means_values:
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto")
+    labels = kmeans.fit_predict(X)
+
+    labels_dict[k] = labels
+    df_clust_kmeans[f"cluster_k{k}"] = labels
+
+    inertia = kmeans.inertia_
+    sil = silhouette_score(X, labels)
+
+    results.append({"k": k, "inertia": inertia, "silhouette": sil})
+
+df_kmeans_metrics = pd.DataFrame(results)
+print(df_kmeans_metrics)
+
+
+# %% [markdown]
+# Построим метод локтя и силуэт кластера для выбранного количества кластеров
+
+# %%
+plt.figure(figsize=(12, 4))
+
+# ---- Локоть по inertia ----
+plt.subplot(1, 2, 1)
+plt.plot(df_kmeans_metrics["k"], df_kmeans_metrics["inertia"], marker="o")
+plt.title("KMeans: метод локтя (inertia)")
+plt.xlabel("Количество кластеров k")
+plt.ylabel("Inertia (сумма квадратов)")
+
+# ---- Silhouette ----
+plt.subplot(1, 2, 2)
+plt.plot(df_kmeans_metrics["k"], df_kmeans_metrics["silhouette"], marker="o")
+plt.title("KMeans: silhouette score")
+plt.xlabel("Количество кластеров k")
+plt.ylabel("Silhouette")
+
+plt.tight_layout()
+plt.show()
+
+
+# %% [markdown]
+# Спроецируем класетры на двумерной плоскости
+
+# %%
+pca = PCA(n_components=2, random_state=42)
+X_pca = pca.fit_transform(X)
+
+df_pca = pd.DataFrame(
+    X_pca,
+    columns=["PC1", "PC2"],
+    index=df_clust_kmeans.index
+)
+
+plt.figure(figsize=(15, 4))
+
+for i, k in enumerate(k_means_values, start=1):
+    plt.subplot(1, len(k_means_values), i)
+    labels = labels_dict[k]
+    df_pca[f"cluster_k{k}"] = labels
+
+    sns.scatterplot(
+        data=df_pca,
+        x="PC1",
+        y="PC2",
+        hue=f"cluster_k{k}",
+        palette="tab10",
+        s=20,
+        legend=False
+    )
+    plt.title(f"KMeans, k = {k}")
+
+plt.tight_layout()
+plt.show()
+
+
+# %% [markdown]
+# Выведем информацию для необходимой кластеризации
+
+# %%
+print_cluster_summary(df_clust_kmeans, "cluster_k5", details=0, bin_threshold=0.15)
+
+# %% [markdown]
+# ## Иерархическая кластеризация
+
+# %%
+df_clust_hc = df_clust.copy()
+
+# %%
+k_values = [2, 3, 4, 5]
+hc_results = []
+hc_labels_dict = {}
+
+for k in k_values:
+    hc = AgglomerativeClustering(
+        n_clusters=k,
+        linkage="ward"  # ward = минимизация внутрикластерной дисперсии
+    )
+    labels = hc.fit_predict(X)
+
+    hc_labels_dict[k] = labels
+    df_clust_hc[f"cluster_hc{k}"] = labels
+
+    sil = silhouette_score(X, labels)
+    hc_results.append({"k": k, "silhouette": sil})
+
+df_hc_metrics = pd.DataFrame(hc_results)
+print(df_hc_metrics)
+
+# %% [markdown]
+# Построим дендрограмму для визуального анализа вложенности кластеров
+
+# %%
+sample_size = min(300, X_pca.shape[0])  # при большем n дендрограмма становится нечитаемой
+X_sample = X_pca[:sample_size]
+
+Z = linkage(X_sample, method="ward")
+
+plt.figure(figsize=(18, 6))
+dendrogram(
+    Z,
+    truncate_mode="level",  # обрезаем дерево по уровню, чтобы не было каши
+    p=5,                     # число отображаемых уровней
+    color_threshold=None,
+    above_threshold_color="grey"
+)
+plt.title("Дендограмма (Agglomerative, метод Уорда, выборка объектов)")
+plt.xlabel("Объекты выборки")
+plt.ylabel("Дистанция")
+plt.tight_layout()
+plt.show()
+
+# %% [markdown]
+# Спроецируем результаты агломеративной кластеризации на плоскость главных компонент
+
+# %%
+df_pca_hc = pd.DataFrame(
+    X_pca,
+    columns=["PC1", "PC2"],
+    index=df_clust_hc.index
+)
+
+plt.figure(figsize=(15, 4))
+
+for i, k in enumerate(k_values, start=1):
+    plt.subplot(1, len(k_values), i)
+    labels = hc_labels_dict[k]
+    df_pca_hc[f"cluster_hc{k}"] = labels
+
+    sns.scatterplot(
+        data=df_pca_hc,
+        x="PC1",
+        y="PC2",
+        hue=f"cluster_hc{k}",
+        palette="tab10",
+        s=20,
+        legend=False
+    )
+    plt.title(f"Agglomerative, k = {k}")
+
+plt.tight_layout()
+plt.show()
+
+# %%
+print_cluster_summary(df_clust_hc, "cluster_hc5", details=0, bin_threshold=0.15)
+
+# %% [markdown]
+# ## DBSCAN
+
+# %% [markdown]
+# Сначала построим k-distance график, чтобы примерно оценить разумное значение eps
+
+# %%
+df_clust_dbscan = df_clust.copy()
+
+min_samples = 15 # поэксперементировать
+
+neighbors = NearestNeighbors(n_neighbors=min_samples)
+neighbors_fit = neighbors.fit(X)
+distances, indices = neighbors_fit.kneighbors(X)
+
+k_distances = np.sort(distances[:, -1])
+
+plt.figure(figsize=(8, 4))
+plt.plot(k_distances)
+plt.title(f"k-distance график для DBSCAN (k = {min_samples})")
+plt.xlabel("Отсортированные объекты")
+plt.ylabel(f"Расстояние до {min_samples}-го соседа")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# %%
+eps = 12 # поэксперементировать
+
+dbscan = DBSCAN(
+    eps=eps,
+    min_samples=min_samples,
+    metric="euclidean",
+    n_jobs=-1
+)
+
+db_labels = dbscan.fit_predict(X)
+
+df_clust_dbscan["cluster_dbscan"] = db_labels
+
+n_clusters = len(set(db_labels)) - (1 if -1 in db_labels else 0)
+n_noise = np.sum(db_labels == -1)
+
+print(f"DBSCAN: eps = {eps}, min_samples = {min_samples}")
+print(f"Количество кластеров (без шума): {n_clusters}")
+print(f"Количество объектов, помеченных как шум (-1): {n_noise}")
+
+# Silhouette считаем только по точкам, которые попали в кластеры (без шума)
+mask_core = db_labels != -1
+
+if n_clusters > 1 and mask_core.sum() > 0:
+    sil_db = silhouette_score(X[mask_core], db_labels[mask_core])
+    print(f"Silhouette-score (без шума): {sil_db:.4f}")
+else:
+    print("Silhouette-score не считается: найден менее чем 2 кластера или почти всё шум.")
+
+# %%
+mask = db_labels != -1
+
+if mask.sum() == 0:
+    print("DBSCAN пометил все объекты как шум, кластеров нет.")
+else:
+    df_pca_db = pd.DataFrame({
+        "PC1": X_pca[mask, 0],
+        "PC2": X_pca[mask, 1],
+        "cluster": db_labels[mask]
+    })
+
+    plt.figure(figsize=(6, 5))
+    sns.scatterplot(
+        data=df_pca_db,
+        x="PC1",
+        y="PC2",
+        hue="cluster",
+        palette="tab10",
+        s=20,
+        alpha=0.8
+    )
+    plt.title("DBSCAN на плоскости главных компонент (без шума)")
+    plt.legend(title="cluster", bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.tight_layout()
+    plt.show()
+
+# %%
+df_db_non_noise = df_clust_dbscan[df_clust_dbscan["cluster_dbscan"] != -1].copy()
+
+if not df_db_non_noise.empty and n_clusters > 0:
+    print_cluster_summary(df_db_non_noise, "cluster_dbscan", details=0, bin_threshold=0.15)
+else:
+    print("DBSCAN пометил почти все объекты как шум — стоит подобрать другие eps / min_samples.")
 
 # %% [markdown]
 # # Сохранение изменений
