@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "app.py", line 72, in build_html
+  File "graph_core.py", line 192, in create_interactive_graph
+  File "pyvis\network.py", line 464, in generate_html
+  File "jinja2\environment.py", line 1010, in get_template
+  File "jinja2\environment.py", line 969, in _load_template
+  File "jinja2\loaders.py", line 126, in load
+  File "jinja2\loaders.py", line 218, in get_source
+jinja2.exceptions.TemplateNotFound: template.html
