@@ -2553,22 +2553,22 @@ def format_labels_for_plot(labels):
     return res
 
 # === Пирсон ===
-test = create_rectangular_correlation_matrix(correlation_pearson, y_keywords, x_keywords)
-test.columns = format_labels_for_plot(test.columns.tolist())
-test.index = format_labels_for_plot(test.index.tolist())
+pears = create_rectangular_correlation_matrix(correlation_pearson, y_keywords, x_keywords)
+pears.columns = format_labels_for_plot(pears.columns.tolist())
+pears.index = format_labels_for_plot(pears.index.tolist())
 create_rectangular_heatmap_html(
-    test,
+    pears,
     'Интерактивная корреляция Пирсона (линейная)',
     'interactive_pearson_heatmap.html',
     cell_size_px=85  # чуть больше для читаемости
 )
 
 # === Спирман ===
-test = create_rectangular_correlation_matrix(correlation_spearman, y_keywords, x_keywords)
-test.columns = format_labels_for_plot(test.columns.tolist())
-test.index = format_labels_for_plot(test.index.tolist())
+spearm = create_rectangular_correlation_matrix(correlation_spearman, y_keywords, x_keywords)
+spearm.columns = format_labels_for_plot(spearm.columns.tolist())
+spearm.index = format_labels_for_plot(spearm.index.tolist())
 create_rectangular_heatmap_html(
-    test,
+    spearm,
     'Интерактивная корреляция Спирмана (ранговая)',
     'interactive_spearman_heatmap.html',
     cell_size_px=85
