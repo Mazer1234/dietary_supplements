@@ -75,7 +75,6 @@ from pyvis.network import Network
 from jinja2 import Environment, FileSystemLoader
 from tabulate import tabulate
 
-
 # %% [markdown]
 # Настроим pandas
 
@@ -944,7 +943,6 @@ df["суммарное_количество_единиц_за_период"] = (
 df["срок_годности"] = df["срок_годности"].astype("Float64")
 df["группа_населения_возраст_детей"] = df["группа_населения_возраст_детей"].astype("Float64")
 
-
 # %% [markdown]
 # # Визуализицаия (Матрицы корреляций и графы)
 
@@ -1210,6 +1208,9 @@ plt.title("Косинусное сходство часто встречающи
 plt.tight_layout()
 
 print(f"Проанализировано {len(frequent_ingredients)} ингредиентов")
+
+# %%
+df.to_csv("data.csv", index=False)
 
 
 # %% [markdown]
@@ -1738,6 +1739,23 @@ export_graph_png(pairs_of_raw, output_path="static_graph_of_raw.png", min_weight
     label_t_ranges=((0.3, 0.45), (0.55, 0.7)),
 )
 
+# %%
+import gradio as gr
+import webbrowser
+
+def process(column, weight):
+  pairs = count_pairs(df, column, mapper=lambda x: CLASS_MAP.get(x, x))
+  pairs = filter_dictionary_by_value(pairs, weight)
+
+  html_path = "interactive_graph.html"
+  png_path = "graph.png"
+
+  create_interactive_graph(pairs, output_path=html_path)
+  export_graph_png(pairs, output_path=png_path, min_weight=weight)
+
+  return (html_path, png_path)
+
+
 # %% [markdown]
 # # Кластеризация
 
@@ -1768,7 +1786,6 @@ cols_to_drop = [
 for col in cols_to_drop:
     if col in df_clust.columns:
         df_clust = df_clust.drop(col, axis=1)
-
 
 # %% [markdown]
 # Напишем столбцы, которые остались, и что с ними будем делать:
@@ -2071,7 +2088,6 @@ for k in k_means_values:
 df_kmeans_metrics = pd.DataFrame(results)
 print(df_kmeans_metrics)
 
-
 # %% [markdown]
 # Построим метод локтя и силуэт кластера для выбранного количества кластеров
 
@@ -2094,7 +2110,6 @@ plt.ylabel("Silhouette")
 
 plt.tight_layout()
 plt.show()
-
 
 # %% [markdown]
 # Спроецируем класетры на двумерной плоскости
@@ -2130,12 +2145,11 @@ for i, k in enumerate(k_means_values, start=1):
 plt.tight_layout()
 plt.show()
 
-
 # %% [markdown]
 # Выведем информацию для необходимой кластеризации
 
 # %%
-print_cluster_summary(df_clust_kmeans, "cluster_k5", details=0, bin_threshold=0.15)
+print_cluster_summary(df_clust_kmeans, "cluster_k3", details=0, bin_threshold=0.15)
 
 # %% [markdown]
 # ## Иерархическая кластеризация
@@ -2219,7 +2233,7 @@ plt.tight_layout()
 plt.show()
 
 # %%
-print_cluster_summary(df_clust_hc, "cluster_hc5", details=0, bin_threshold=0.15)
+print_cluster_summary(df_clust_hc, "cluster_hc3", details=0, bin_threshold=0.15)
 
 # %% [markdown]
 # ## DBSCAN
@@ -2311,6 +2325,254 @@ if not df_db_non_noise.empty and n_clusters > 0:
     print_cluster_summary(df_db_non_noise, "cluster_dbscan", details=0, bin_threshold=0.15)
 else:
     print("DBSCAN пометил почти все объекты как шум — стоит подобрать другие eps / min_samples.")
+
+# %% [markdown]
+# Интерактивное представление матрицы корелляции
+
+# %%
+# Определяем ключевые слова для поиска
+y_keywords = ['пищевые_вещества', 'минорные_компоненты', 'пробиотики', 'минеральные']
+x_keywords = ['система_органов', 'группы_населения', 'количество_групп_компонентов']
+
+# Функция для фильтрации с созданием прямоугольной матрицы
+def create_rectangular_correlation_matrix(corr_matrix, y_keywords, x_keywords):
+    """Создает прямоугольную корреляционную матрицу между разными группами признаков."""
+
+    # Преобразуем все к нижнему регистру для унификации
+    y_keywords_lower = [kw.lower() for kw in y_keywords]
+    x_keywords_lower = [kw.lower() for kw in x_keywords]
+
+    # Получаем признаки для оси Y (будут строками матрицы)
+    y_features = []
+    for feature in corr_matrix.columns:
+        feature_lower = str(feature).lower()
+        if any(keyword in feature_lower for keyword in y_keywords_lower):
+            y_features.append(feature)
+
+    print(f"Найдено признаков для оси Y: {len(y_features)}")
+    if y_features:
+        print("Примеры признаков оси Y:", y_features[:5])
+
+    # Получаем признаки для оси X (будут столбцами матрицы)
+    x_features = []
+    for feature in corr_matrix.columns:
+        feature_lower = str(feature).lower()
+        if any(keyword in feature_lower for keyword in x_keywords_lower):
+            x_features.append(feature)
+
+    print(f"Найдено признаков для оси X: {len(x_features)}")
+    if x_features:
+        print("Примеры признаков оси X:", x_features[:5])
+
+    # Создаем прямоугольную матрицу корреляции
+    if y_features and x_features:
+        # Используем loc для выбора строк (Y) и столбцов (X)
+        rectangular_matrix = corr_matrix.loc[y_features, x_features]
+        return rectangular_matrix
+    else:
+        print("Не удалось создать прямоугольную матрицу - отсутствуют признаки для одной из осей")
+        return pd.DataFrame()
+
+
+# %%
+pearson = create_rectangular_correlation_matrix(correlation_pearson, y_keywords, x_keywords)
+plt.figure(figsize=(14, 12))
+sns.heatmap(
+    pearson,
+    cmap='RdBu_r',
+    center=0,
+    vmin=-0.5, vmax=0.5,
+    square=True,
+    cbar_kws={
+        'label': 'Корреляция',
+        'shrink': 0.8,
+        'ticks': [-0.5, -0.25, 0, 0.25, 0.5]
+    }
+)
+
+# %%
+import plotly.graph_objects as go
+import pandas as pd
+import re
+
+def create_rectangular_heatmap_html(
+    corr_matrix,
+    title: str,
+    output_filename: str,
+    y_label: str = "Признаки (Y)",
+    x_label: str = "Признаки (X)",
+    cell_size_px: int = 75,
+    min_dimension_px: int = 1000,
+):
+    num_rows, num_cols = corr_matrix.shape
+
+    dynamic_height = max(min_dimension_px, num_rows * cell_size_px + 300)
+    dynamic_width = max(min_dimension_px, num_cols * cell_size_px + 400)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=corr_matrix.values,
+        x=corr_matrix.columns,
+        y=corr_matrix.index,
+        colorscale='RdBu_r',
+        zmin=-1.0,
+        zmax=1.0,
+        hoverongaps=False,
+        hovertemplate='X: %{x}<br>Y: %{y}<br>Корреляция: %{z:.3f}<extra></extra>',
+        colorbar=dict(
+            title="Корреляция",
+            titleside="right",
+            thickness=25,
+            len=0.8,
+            tickfont=dict(size=11)
+        )
+    ))
+
+    fig.update_layout(
+        title=dict(text=title, x=0.5, xanchor='center', font=dict(size=18)),
+        xaxis_title=x_label,
+        yaxis_title=y_label,
+        xaxis=dict(
+            tickangle=-90,
+            automargin=True,
+            tickfont=dict(size=10),
+            showspikes=True,
+            spikemode='across',
+            spikesnap='cursor',
+            spikethickness=1,
+            spikecolor="rgba(100,100,100,0.7)"
+        ),
+        yaxis=dict(
+            autorange="reversed",
+            automargin=True,
+            tickfont=dict(size=10),
+            showspikes=True,
+            spikemode='across',
+            spikesnap='cursor',
+            spikethickness=1,
+            spikecolor="rgba(100,100,100,0.7)"
+        ),
+        autosize=False,
+        width=dynamic_width,
+        height=dynamic_height,
+        margin=dict(l=200, r=150, t=140, b=200),
+        plot_bgcolor='rgba(0,0,0,0)',
+        hovermode='closest'
+    )
+
+    config = {
+        'displaylogo': False,
+        'displayModeBar': True,
+        'toImageButtonOptions': {
+            'format': 'svg',
+            'filename': output_filename.replace('.html', ''),
+            'height': dynamic_height,
+            'width': dynamic_width,
+            'scale': 2
+        }
+    }
+
+    # Сохраняем HTML
+    fig.write_html(
+        output_filename,
+        auto_open=False,
+        config=config,
+        include_plotlyjs='cdn'
+    )
+
+    # Словарь перевода стандартных кнопок Plotly
+    translations = {
+        "Download plot": "Скачать",
+        "Zoom": "Увеличить",
+        "Pan": "Переместить",
+        "Zoom in": "Приблизить",
+        "Zoom out": "Отдалить",
+        "Autoscale": "Авто масштаб",
+        "Reset axes": "Сбросить оси",
+    }
+
+    # Читаем файл, добавляем скрипт перевода
+    with open(output_filename, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+
+    # Создаём JS-скрипт для замены текста кнопок после загрузки
+    js_script = """
+    <script>
+    function translatePlotlyButtons() {
+        const translations = """ + str(translations).replace("'", '"') + """;
+        for (let key in translations) {
+            let elements = document.body.querySelectorAll('[data-title="' + key + '"]');
+            elements.forEach(el => {
+                el.setAttribute('data-title', translations[key]);
+                if (el.hasAttribute('aria-label')) {
+                    el.setAttribute('aria-label', translations[key]);
+                }
+                // Иногда подсказка в тултипе
+                let tooltip = el.querySelector('title');
+                if (tooltip && tooltip.textContent === key) {
+                    tooltip.textContent = translations[key];
+                }
+            });
+        }
+        // Также переводим всплывающие подсказки (title)
+        document.querySelectorAll('[title]').forEach(el => {
+            if (translations[el.title]) {
+                el.title = translations[el.title];
+            }
+        });
+    }
+
+    // Запускаем перевод после полной загрузки страницы и графика
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', translatePlotlyButtons);
+    } else {
+        translatePlotlyButtons();
+    }
+
+    // Также пытаемся отловить момент, когда Plotly добавит кнопки (асинхронно)
+    const observer = new MutationObserver(translatePlotlyButtons);
+    observer.observe(document.body, { childList: true, subtree: true });
+    </script>
+    """
+
+    # Вставляем скрипт перед закрывающим
+    html_content = html_content.replace('</body>', js_script + '</body>')
+
+    with open(output_filename, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+
+    print(f"Интерактивная тепловая карта сохранена в {output_filename} "
+          f"(размер: {dynamic_width}×{dynamic_height})")
+
+def format_labels_for_plot(labels):
+    res = []
+    for lbl in labels:
+        # Заменяем подчёркивания на пробелы
+        clean_label = lbl.replace('_', ' ')
+        # Делаем жирным через HTML-тег
+        res.append(f'<b>{clean_label}</b>')
+    return res
+
+# === Пирсон ===
+test = create_rectangular_correlation_matrix(correlation_pearson, y_keywords, x_keywords)
+test.columns = format_labels_for_plot(test.columns.tolist())
+test.index = format_labels_for_plot(test.index.tolist())
+create_rectangular_heatmap_html(
+    test,
+    'Интерактивная корреляция Пирсона (линейная)',
+    'interactive_pearson_heatmap.html',
+    cell_size_px=85  # чуть больше для читаемости
+)
+
+# === Спирман ===
+test = create_rectangular_correlation_matrix(correlation_spearman, y_keywords, x_keywords)
+test.columns = format_labels_for_plot(test.columns.tolist())
+test.index = format_labels_for_plot(test.index.tolist())
+create_rectangular_heatmap_html(
+    test,
+    'Интерактивная корреляция Спирмана (ранговая)',
+    'interactive_spearman_heatmap.html',
+    cell_size_px=85
+)
 
 # %% [markdown]
 # # Сохранение изменений
