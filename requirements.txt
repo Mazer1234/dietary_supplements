@@ -10,3 +10,4 @@ jupyter
 nbconvert
 scikit-learn
 gradio
+plotly
