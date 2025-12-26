@@ -1303,7 +1303,6 @@ def create_rectangular_heatmap_html(
         hovertemplate='X: %{x}<br>Y: %{y}<br>Корреляция: %{z:.3f}<extra></extra>',
         colorbar=dict(
             title="Корреляция",
-            titleside="right",
             thickness=25,
             len=0.8,
             tickfont=dict(size=11)
