@@ -2557,6 +2557,241 @@ if not df_db_non_noise.empty and n_clusters > 0:
 else:
     print("DBSCAN пометил почти все объекты как шум — стоит подобрать другие eps / min_samples.")
 
+# %%
+MAPPING_PATH = Path("Сопоставление реестра и продаж 09062026.xlsx")
+SELL_PATH = Path("sell.xlsx")
+
+DATASET_NAME_COLUMN = "наименование"
+MAPPING_REGISTRY_COLUMN = "Название в исходном датасете - в РЕЕСТРЕ"
+MAPPING_SALES_COLUMN = "Название в датасете продаж"
+SELL_TRADE_NAME_COLUMN = "ЛС.Торговое наименование"
+SELL_YEAR_COLUMN = "Календарь.Год"
+SELL_QUANTITY_COLUMN = "Sell  Out Количество, уп."
+SELL_AMOUNT_COLUMN = "Sell  Out Сумма, RUB"
+
+
+def normalize_supplement_name(value: object) -> str:
+    """Нормализовать название только для технического ключа соединения."""
+    if pd.isna(value):
+        return ""
+
+    text = unicodedata.normalize("NFKC", str(value)).casefold().replace("ё", "е")
+    text = text.replace("®", " ").replace("™", " ")
+    text = re.sub(r"[^0-9a-zа-я]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def split_sales_aliases(value: object) -> list[str]:
+    """Разделить перечисленные в таблице соответствий торговые названия."""
+    if pd.isna(value):
+        return []
+
+    # Одиночный '/' внутри названия сохраняется. Разделителем считается '/'
+    # с пробелами вокруг, а также вертикальная черта или перевод строки.
+    parts = re.split(r"\s*\|\s*|\s+/\s+|[\r\n]+", str(value))
+    return [re.sub(r"\s+", " ", part).strip() for part in parts if part.strip()]
+
+
+def _require_columns(dataframe: pd.DataFrame, columns: list[str], file_label: str) -> None:
+    missing = [column for column in columns if column not in dataframe.columns]
+    if missing:
+        raise KeyError(f"В {file_label} отсутствуют столбцы: {missing}")
+
+
+def add_sales_to_dataset(
+    dataset: pd.DataFrame,
+    mapping_path: str | Path = MAPPING_PATH,
+    sell_path: str | Path = SELL_PATH,
+    dataset_name_column: str = DATASET_NAME_COLUMN,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Добавить к постобработанному датасету годовые и суммарные продажи.
+
+    Соединение выполняется в два шага:
+    ``dataset[наименование]`` -> таблица соответствий -> ``sell.xlsx``.
+    Строки исходного датасета не размножаются: все SKU и варианты торговых
+    названий агрегируются по году.
+    """
+    if dataset_name_column not in dataset.columns:
+        raise KeyError(f"В df отсутствует столбец '{dataset_name_column}'")
+
+    mapping = pd.read_excel(mapping_path, sheet_name=0)
+    sell = pd.read_excel(sell_path, sheet_name=0)
+
+    _require_columns(
+        mapping,
+        [MAPPING_REGISTRY_COLUMN, MAPPING_SALES_COLUMN],
+        str(mapping_path),
+    )
+    _require_columns(
+        sell,
+        [
+            SELL_TRADE_NAME_COLUMN,
+            SELL_YEAR_COLUMN,
+            SELL_QUANTITY_COLUMN,
+            SELL_AMOUNT_COLUMN,
+        ],
+        str(sell_path),
+    )
+
+    mapping = mapping[[MAPPING_REGISTRY_COLUMN, MAPPING_SALES_COLUMN]].copy()
+    mapping["_registry_key"] = mapping[MAPPING_REGISTRY_COLUMN].map(
+        normalize_supplement_name
+    )
+    mapping = mapping[mapping["_registry_key"] != ""].copy()
+    registry_keys = pd.Index(mapping["_registry_key"].drop_duplicates())
+
+    aliases = mapping.assign(
+        _sales_alias=mapping[MAPPING_SALES_COLUMN].map(split_sales_aliases)
+    ).explode("_sales_alias")
+    aliases["_sales_key"] = aliases["_sales_alias"].map(normalize_supplement_name)
+    aliases = aliases[aliases["_sales_key"] != ""].drop_duplicates(
+        ["_registry_key", "_sales_key"]
+    )
+
+    sell = sell[
+        [
+            SELL_TRADE_NAME_COLUMN,
+            SELL_YEAR_COLUMN,
+            SELL_QUANTITY_COLUMN,
+            SELL_AMOUNT_COLUMN,
+        ]
+    ].copy()
+    sell["_sales_key"] = sell[SELL_TRADE_NAME_COLUMN].map(normalize_supplement_name)
+    sell["_year"] = pd.to_numeric(sell[SELL_YEAR_COLUMN], errors="coerce").astype("Int64")
+    sell["_quantity"] = pd.to_numeric(sell[SELL_QUANTITY_COLUMN], errors="coerce").fillna(0)
+    sell["_amount_rub"] = pd.to_numeric(sell[SELL_AMOUNT_COLUMN], errors="coerce").fillna(0)
+    sell = sell[(sell["_sales_key"] != "") & sell["_year"].notna()].copy()
+
+    sales_by_name_year = (
+        sell.groupby(["_sales_key", "_year"], as_index=False, observed=True)[
+            ["_quantity", "_amount_rub"]
+        ]
+        .sum()
+    )
+    sell_keys = set(sales_by_name_year["_sales_key"])
+    aliases["_alias_found_in_sell"] = aliases["_sales_key"].isin(sell_keys)
+    registry_count_by_alias = aliases.groupby("_sales_key")["_registry_key"].nunique()
+    shared_alias_keys = set(registry_count_by_alias[registry_count_by_alias > 1].index)
+    aliases["_alias_shared_between_registry_names"] = aliases["_sales_key"].isin(
+        shared_alias_keys
+    )
+
+    mapped_sales = aliases.merge(
+        sales_by_name_year,
+        how="inner",
+        on="_sales_key",
+        validate="m:m",
+    )
+    sales_by_registry_year = (
+        mapped_sales.groupby(["_registry_key", "_year"], as_index=False, observed=True)[
+            ["_quantity", "_amount_rub"]
+        ]
+        .sum()
+    )
+
+    features = pd.DataFrame(index=registry_keys)
+    features.index.name = "_registry_key"
+
+    alias_count = aliases.groupby("_registry_key")["_sales_key"].nunique()
+    matched_alias_count = (
+        aliases[aliases["_alias_found_in_sell"]]
+        .groupby("_registry_key")["_sales_key"]
+        .nunique()
+    )
+    shared_alias_count = (
+        aliases[aliases["_alias_shared_between_registry_names"]]
+        .groupby("_registry_key")["_sales_key"]
+        .nunique()
+    )
+    features["sales_mapping_alias_count"] = alias_count
+    features["sales_matched_alias_count"] = matched_alias_count
+    features["sales_shared_alias_count"] = shared_alias_count
+
+    years = sorted(int(year) for year in sales_by_registry_year["_year"].unique())
+    if not sales_by_registry_year.empty:
+        quantity_by_year = sales_by_registry_year.pivot(
+            index="_registry_key",
+            columns="_year",
+            values="_quantity",
+        ).rename(columns=lambda year: f"sell_out_quantity_packages_{int(year)}")
+        amount_by_year = sales_by_registry_year.pivot(
+            index="_registry_key",
+            columns="_year",
+            values="_amount_rub",
+        ).rename(columns=lambda year: f"sell_out_amount_rub_{int(year)}")
+        features = features.join(quantity_by_year, how="left").join(amount_by_year, how="left")
+
+    quantity_columns = [f"sell_out_quantity_packages_{year}" for year in years]
+    amount_columns = [f"sell_out_amount_rub_{year}" for year in years]
+    sales_columns = quantity_columns + amount_columns
+    for column in sales_columns:
+        if column not in features:
+            features[column] = 0
+    features[sales_columns] = features[sales_columns].fillna(0)
+    features["sell_out_quantity_packages_total"] = features[quantity_columns].sum(axis=1)
+    features["sell_out_amount_rub_total"] = features[amount_columns].sum(axis=1)
+    features["sales_mapping_alias_count"] = (
+        features["sales_mapping_alias_count"].fillna(0).astype("int64")
+    )
+    features["sales_matched_alias_count"] = (
+        features["sales_matched_alias_count"].fillna(0).astype("int64")
+    )
+    features["sales_shared_alias_count"] = (
+        features["sales_shared_alias_count"].fillna(0).astype("int64")
+    )
+    features["sales_has_data"] = features["sales_matched_alias_count"] > 0
+    features["sales_has_shared_alias"] = features["sales_shared_alias_count"] > 0
+
+    result = dataset.copy()
+    result["_registry_key"] = result[dataset_name_column].map(normalize_supplement_name)
+    result = result.join(features, how="left", on="_registry_key", validate="m:1")
+    result["sales_mapping_found"] = result["_registry_key"].isin(registry_keys)
+    result["sales_mapping_alias_count"] = (
+        result["sales_mapping_alias_count"].fillna(0).astype("int64")
+    )
+    result["sales_matched_alias_count"] = (
+        result["sales_matched_alias_count"].fillna(0).astype("int64")
+    )
+    result["sales_shared_alias_count"] = (
+        result["sales_shared_alias_count"].fillna(0).astype("int64")
+    )
+    result["sales_has_data"] = result["sales_has_data"].fillna(False).astype(bool)
+    result["sales_has_shared_alias"] = (
+        result["sales_has_shared_alias"].fillna(False).astype(bool)
+    )
+    result[sales_columns + [
+        "sell_out_quantity_packages_total",
+        "sell_out_amount_rub_total",
+    ]] = result[sales_columns + [
+        "sell_out_quantity_packages_total",
+        "sell_out_amount_rub_total",
+    ]].fillna(0)
+    result = result.drop(columns="_registry_key")
+
+    report = {
+        "dataset_rows": len(result),
+        "mapping_found_rows": int(result["sales_mapping_found"].sum()),
+        "rows_with_sales_data": int(result["sales_has_data"].sum()),
+        "rows_without_mapping": int((~result["sales_mapping_found"]).sum()),
+        "mapping_aliases": len(aliases),
+        "matched_sell_aliases": int(aliases["_alias_found_in_sell"].sum()),
+        "unmatched_sell_aliases": int((~aliases["_alias_found_in_sell"]).sum()),
+        "shared_sell_aliases": len(shared_alias_keys),
+        "rows_with_shared_sell_alias": int(result["sales_has_shared_alias"].sum()),
+        "sales_years": years,
+    }
+    return result, report
+
+
+# При вставке всего файла в конец ноутбука этот блок обновит существующий df.
+if __name__ == "__main__" and "df" in globals():
+    df, sales_merge_report = add_sales_to_dataset(df)
+    print("Данные о продажах добавлены:")
+    print(pd.Series(sales_merge_report).to_string())
+
+# %%
+df.to_excel('dataframe.xlsx', index=False)
+
 # %% [markdown]
 # # Сохранение изменений
 
