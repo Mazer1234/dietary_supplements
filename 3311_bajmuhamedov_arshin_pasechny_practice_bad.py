@@ -2557,6 +2557,12 @@ if not df_db_non_noise.empty and n_clusters > 0:
 else:
     print("DBSCAN пометил почти все объекты как шум — стоит подобрать другие eps / min_samples.")
 
+# %% [markdown]
+# # Продажи
+
+# %% [markdown]
+# Для дополнения реестровых данных был получен файл с агрегированными данными о продажах БАДов. Каждая строка содержит торговое наименование, международное непатентованное наименование, описание препарата, производителя или упаковщика, календарный год, количество проданных упаковок и сумму продаж в рублях.
+
 # %%
 MAPPING_PATH = Path("Сопоставление реестра и продаж 09062026.xlsx")
 SELL_PATH = Path("sell.xlsx")
@@ -2784,13 +2790,128 @@ def add_sales_to_dataset(
 
 
 # При вставке всего файла в конец ноутбука этот блок обновит существующий df.
-if __name__ == "__main__" and "df" in globals():
-    df, sales_merge_report = add_sales_to_dataset(df)
-    print("Данные о продажах добавлены:")
-    print(pd.Series(sales_merge_report).to_string())
+df, sales_merge_report = add_sales_to_dataset(df)
+print("Данные о продажах добавлены:")
+print(pd.Series(sales_merge_report).to_string())
 
 # %%
 df.to_excel('dataframe.xlsx', index=False)
+
+# %% [markdown]
+# Для каждой из 14 систем органов построим годовые ряды продаж за 2016–2025 годы. Визуализации покажет сумму продаж в рублях и количество реализованных упаковок. Один БАД может относиться к нескольким системам органов, поэтому показатели отражают продажи в разрезе каждой системы и не предназначены для суммирования между системами.
+
+# %%
+quantity_columns_by_year = {}
+amount_columns_by_year = {}
+
+for column in df.columns:
+    quantity_match = re.fullmatch(r"sell_out_quantity_packages_(\d{4})", str(column))
+    amount_match = re.fullmatch(r"sell_out_amount_rub_(\d{4})", str(column))
+
+    if quantity_match:
+        quantity_columns_by_year[int(quantity_match.group(1))] = column
+    if amount_match:
+        amount_columns_by_year[int(amount_match.group(1))] = column
+
+years = sorted(set(quantity_columns_by_year) & set(amount_columns_by_year))
+
+system_columns = sorted(
+    column
+    for column in df.columns
+    if str(column).startswith("система_органов_")
+)
+
+if "sales_has_shared_alias" in df.columns:
+    shared_rows = int(df["sales_has_shared_alias"].fillna(False).sum())
+    if shared_rows:
+        print(
+            f"Внимание: {shared_rows} строк имеют торговые названия, "
+            "разделяемые несколькими БАДами. Графики используют "
+            "сопоставления как есть и не являются аддитивными между системами."
+        )
+
+# Таблица трендов: пригодится для последующего анализа или сохранения.
+trend_rows = []
+
+for system_column in system_columns:
+    system_mask = (
+        pd.to_numeric(df[system_column], errors="coerce")
+        .fillna(0)
+        .eq(1)
+    )
+
+    system_name = (
+        system_column
+        .removeprefix("система_органов_")
+        .replace("_", " ")
+        .capitalize()
+    )
+
+    for year in years:
+        quantity = pd.to_numeric(
+            df.loc[system_mask, quantity_columns_by_year[year]],
+            errors="coerce",
+        ).fillna(0).sum()
+
+        amount_rub = pd.to_numeric(
+            df.loc[system_mask, amount_columns_by_year[year]],
+            errors="coerce",
+        ).fillna(0).sum()
+
+        trend_rows.append(
+            {
+                "система_органов": system_name,
+                "год": year,
+                "количество_упаковок": quantity,
+                "сумма_продаж_rub": amount_rub,
+            }
+        )
+
+system_sales_trends = pd.DataFrame(trend_rows)
+
+money_formatter = FuncFormatter(
+    lambda value, _: f"{value / 1_000_000:,.0f}".replace(",", " ")
+)
+quantity_formatter = FuncFormatter(
+    lambda value, _: f"{value:,.0f}".replace(",", " ")
+)
+
+for system_name, trend in system_sales_trends.groupby("система_органов", sort=True):
+    trend = trend.sort_values("год")
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+    axes[0].plot(
+        trend["год"],
+        trend["сумма_продаж_rub"],
+        marker="o",
+        linewidth=2.5,
+        color="#1f77b4",
+    )
+    axes[0].set_title(f"{system_name}: продажи в деньгах")
+    axes[0].set_xlabel("Год")
+    axes[0].set_ylabel("Продажи, млн ₽")
+    axes[0].set_xticks(years)
+    axes[0].yaxis.set_major_formatter(money_formatter)
+    axes[0].grid(alpha=0.3)
+
+    axes[1].plot(
+        trend["год"],
+        trend["количество_упаковок"],
+        marker="o",
+        linewidth=2.5,
+        color="#ff7f0e",
+    )
+    axes[1].set_title(f"{system_name}: продажи в упаковках")
+    axes[1].set_xlabel("Год")
+    axes[1].set_ylabel("Количество упаковок")
+    axes[1].set_xticks(years)
+    axes[1].yaxis.set_major_formatter(quantity_formatter)
+    axes[1].grid(alpha=0.3)
+
+    fig.suptitle(f"Тенденция продаж БАДов: {system_name}", fontsize=15, y=1.03)
+    plt.tight_layout()
+    plt.show()
 
 # %% [markdown]
 # # Сохранение изменений
