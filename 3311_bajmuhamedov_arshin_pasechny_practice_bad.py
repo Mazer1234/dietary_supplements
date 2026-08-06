@@ -29,8 +29,8 @@
 
 # %%
 # Установка внешних библиотек
-# !pip install --upgrade pyvis
-# !pip install -U sentence-transformers
+!pip install --upgrade pyvis
+!pip install -U sentence-transformers
 
 # Стандартная библиотека Python
 import csv
@@ -47,18 +47,19 @@ from itertools import combinations
 from pathlib import Path
 import pathlib
 from urllib.parse import urlencode
+from IPython.display import display
 
 # Сторонние библиотеки
 import gradio as gr
 import webbrowser
 import requests
-import re
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+from matplotlib.ticker import FuncFormatter
 import seaborn as sns
 from scipy.stats import pearsonr
 import networkx as nx
@@ -78,6 +79,8 @@ import pyvis
 from pyvis.network import Network
 from jinja2 import Environment, FileSystemLoader
 from tabulate import tabulate
+from __future__ import annotations
+import unicodedata
 
 # %% [markdown]
 # Настроим pandas
@@ -2380,7 +2383,7 @@ plt.show()
 # Выведем информацию для необходимой кластеризации
 
 # %%
-print_cluster_summary(df_clust_kmeans, "cluster_k5", details=0, bin_threshold=0.15)
+print_cluster_summary(df_clust_kmeans, "cluster_k7", details=0, bin_threshold=0.15)
 
 # %% [markdown]
 # ## Иерархическая кластеризация
@@ -2912,6 +2915,251 @@ for system_name, trend in system_sales_trends.groupby("система_орган
     fig.suptitle(f"Тенденция продаж БАДов: {system_name}", fontsize=15, y=1.03)
     plt.tight_layout()
     plt.show()
+
+
+# Итоговые продажи за все доступные годы
+SALES_COLUMN = "sell_out_amount_rub_total"
+QUANTITY_COLUMN = "sell_out_quantity_packages_total"
+
+INGREDIENT_COLUMN = "ингредиент_описание"
+COMPONENT_COLUMN = "биологически_активные_вещества"
+
+# True — исключить строки, продажи которых могли быть присвоены
+# нескольким позициям реестра через одно торговое название.
+EXCLUDE_SHARED_ALIAS_ROWS = True
+
+required_columns = {
+    SALES_COLUMN,
+    QUANTITY_COLUMN,
+    INGREDIENT_COLUMN,
+    COMPONENT_COLUMN,
+}
+
+missing_columns = required_columns.difference(df.columns)
+
+if missing_columns:
+    raise KeyError(
+        "В df отсутствуют необходимые столбцы: "
+        + ", ".join(sorted(missing_columns))
+    )
+
+
+def normalize_item_name(value):
+    """
+    Нормализация названия ингредиента или компонента:
+    - единый регистр;
+    - ё -> е;
+    - удаление повторных пробелов;
+    - удаление лишней пунктуации по краям.
+    """
+    if pd.isna(value):
+        return None
+
+    value = unicodedata.normalize("NFKC", str(value))
+    value = value.casefold().replace("ё", "е")
+    value = re.sub(r"\s+", " ", value)
+    value = value.strip(" \t\r\n.,;:\"'")
+
+    if not value or value in {"nan", "none", "<na>", "0"}:
+        return None
+
+    return value
+
+
+def split_unique_items(value):
+    """
+    Разбивает строку по запятым и не позволяет одному и тому же
+    ингредиенту/компоненту получить продажи одного БАДа дважды.
+    """
+    if pd.isna(value):
+        return []
+
+    items = [
+        normalize_item_name(item)
+        for item in str(value).split(",")
+    ]
+
+    items = [item for item in items if item]
+
+    # dict сохраняет исходный порядок и удаляет повторы
+    return list(dict.fromkeys(items))
+
+
+def calculate_full_demand(data, source_column, result_column):
+    """
+    Каждому ингредиенту/компоненту начисляется полная сумма
+    и полное количество продаж БАДа, в котором он присутствует.
+    """
+    exploded = data[
+        [source_column, SALES_COLUMN, QUANTITY_COLUMN]
+    ].copy()
+
+    exploded[result_column] = exploded[source_column].apply(
+        split_unique_items
+    )
+
+    exploded = (
+        exploded
+        .drop(columns=source_column)
+        .explode(result_column)
+        .dropna(subset=[result_column])
+    )
+
+    result = (
+        exploded
+        .groupby(result_column, as_index=False)
+        .agg(
+            full_sales=(
+                SALES_COLUMN,
+                "sum",
+            ),
+            full_quantity=(
+                QUANTITY_COLUMN,
+                "sum",
+            ),
+        )
+    )
+
+    result["full_sales"] = pd.to_numeric(
+        result["full_sales"],
+        errors="coerce",
+    ).fillna(0)
+
+    result["full_quantity"] = pd.to_numeric(
+        result["full_quantity"],
+        errors="coerce",
+    ).fillna(0)
+
+    return result
+
+# %% [markdown]
+# Для оценки востребованности каждому ингредиенту и каждому компоненту присваивались полная сумма и полное количество продаж каждого БАДа, в котором они указаны. Поэтому показатели характеризуют продажи БАДов, содержащих соответствующий элемент, а не изолированный спрос на него. Продажи многокомпонентного продукта учитываются у каждого входящего в него элемента.
+
+# %%
+# Берём только позиции, для которых действительно найдены продажи
+if "sales_has_data" in df.columns:
+    sales_df = df.loc[
+        df["sales_has_data"].fillna(False)
+    ].copy()
+else:
+    sales_df = df.loc[
+        (df[SALES_COLUMN].fillna(0) != 0)
+        | (df[QUANTITY_COLUMN].fillna(0) != 0)
+    ].copy()
+
+
+# Защита от возможного повторного учёта одного торгового названия
+if (
+    EXCLUDE_SHARED_ALIAS_ROWS
+    and "sales_has_shared_alias" in sales_df.columns
+):
+    shared_alias_count = int(
+        sales_df["sales_has_shared_alias"]
+        .fillna(False)
+        .sum()
+    )
+
+    sales_df = sales_df.loc[
+        ~sales_df["sales_has_shared_alias"].fillna(False)
+    ].copy()
+
+    print(
+        "Исключено позиций с неоднозначным торговым названием:",
+        shared_alias_count,
+    )
+
+print("Позиций БАДов, использованных в расчёте:", len(sales_df))
+
+
+# Полные таблицы по всем ингредиентам и компонентам
+ingredient_demand = calculate_full_demand(
+    data=sales_df,
+    source_column=INGREDIENT_COLUMN,
+    result_column="ingredient",
+)
+
+component_demand = calculate_full_demand(
+    data=sales_df,
+    source_column=COMPONENT_COLUMN,
+    result_column="component",
+)
+
+
+# Четыре требуемые таблицы
+top10_ingredients_by_full_sales = (
+    ingredient_demand[
+        ["ingredient", "full_sales"]
+    ]
+    .sort_values("full_sales", ascending=False)
+    .head(10)
+    .reset_index(drop=True)
+)
+
+top10_ingredients_by_full_quantity = (
+    ingredient_demand[
+        ["ingredient", "full_quantity"]
+    ]
+    .sort_values("full_quantity", ascending=False)
+    .head(10)
+    .reset_index(drop=True)
+)
+
+top10_components_by_full_sales = (
+    component_demand[
+        ["component", "full_sales"]
+    ]
+    .sort_values("full_sales", ascending=False)
+    .head(10)
+    .reset_index(drop=True)
+)
+
+top10_components_by_full_quantity = (
+    component_demand[
+        ["component", "full_quantity"]
+    ]
+    .sort_values("full_quantity", ascending=False)
+    .head(10)
+    .reset_index(drop=True)
+)
+
+
+def display_rating(title, table):
+    print(f"\n{title}")
+
+    formatters = {}
+
+    if "full_sales" in table.columns:
+        formatters["full_sales"] = "{:,.0f} ₽"
+
+    if "full_quantity" in table.columns:
+        formatters["full_quantity"] = "{:,.0f}"
+
+    display(
+        table.style
+        .format(formatters, thousands=" ")
+        .hide(axis="index")
+    )
+
+
+display_rating(
+    "Топ-10 ингредиентов по сумме продаж",
+    top10_ingredients_by_full_sales,
+)
+
+display_rating(
+    "Топ-10 ингредиентов по количеству упаковок",
+    top10_ingredients_by_full_quantity,
+)
+
+display_rating(
+    "Топ-10 компонентов по сумме продаж",
+    top10_components_by_full_sales,
+)
+
+display_rating(
+    "Топ-10 компонентов по количеству упаковок",
+    top10_components_by_full_quantity,
+)
 
 # %% [markdown]
 # # Сохранение изменений
